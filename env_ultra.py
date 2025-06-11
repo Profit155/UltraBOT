@@ -70,6 +70,8 @@ class UltraKillEnv:
         self.prev_frame = None            # previous observation frame
         self.stuck_frames = 0             # number of frames with little change
         self.checkpoint_active = False    # checkpoint text currently visible
+        self.prev_slot_pressed = [False]*5
+        self.frames_since_style = 0       # frames since last style gain
 
     # ---------------- Gym API --------------
     def reset(self, *, seed=None, options=None):
@@ -144,11 +146,19 @@ class UltraKillEnv:
 
         style_gain = style - self.prev_style
         if style_gain > 0:
-            r += style_gain * 0.1                   # бонус за стиль/убийства
+            r += style_gain * 0.15                  # бонус за стиль/убийства
+            if style_gain > 50:
+                r += 1.0                            # испытания оружия
             if style_gain > 100:
                 r += 5.0                            # много врагов
             if style_gain > 200:
                 r += 10.0                           # убийство массы врагов
+            self.frames_since_style = 0
+        else:
+            self.frames_since_style += 1
+
+        if self.frames_since_style > 30 and (action[7] or action[8]):
+            r -= 0.1                                # стрельба без врагов
 
         r += (rail - self.prev_rail) * 2.0          # заряд rail
 
@@ -164,12 +174,22 @@ class UltraKillEnv:
 
         # --- смена оружия ---
         cur_slot = None
+        variant_switch = False
         for i in range(5):                 # слоты 1-5
-            if action[SLOT_OFF+i]:
+            pressed = action[SLOT_OFF+i] > 0
+            if pressed and cur_slot is None:
                 cur_slot = i
-        if cur_slot is not None and cur_slot != self.prev_slot:
-            r += 0.5                       # бонус за смену
-            self.frames_since_slot = 0
+            if pressed and i == self.prev_slot and not self.prev_slot_pressed[i]:
+                variant_switch = True
+            self.prev_slot_pressed[i] = pressed
+
+        if cur_slot is not None:
+            if variant_switch:
+                r += 0.3                   # переключение варианта оружия
+                self.frames_since_slot = 0
+            elif cur_slot != self.prev_slot:
+                r += 0.5                   # бонус за смену оружия
+                self.frames_since_slot = 0
             self.prev_slot = cur_slot
         else:
             self.frames_since_slot += 1
