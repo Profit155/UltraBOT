@@ -5,6 +5,9 @@ except ImportError:
 
 from gym import spaces
 import numpy as np, cv2, mss, time, pydirectinput
+import psutil
+import pygetwindow as gw
+from pynput import keyboard
 # ─────────── action-space (17 бинарных кнопок) ───────────
 A_KEYS = [
     'w','a','s','d',          # 0-3  движение
@@ -20,9 +23,42 @@ IDX_CTRL  = A_KEYS.index('ctrl')
 SLOT_OFF  = 9                        # индекс первого слота '1'
 MOUSE_AXES = 2                       # dx,dy appended when mouse=True
 
+# Base resolution for scaling HUD coordinates
+BASE_W, BASE_H = 1024, 768
+
+# HUD element coordinates (top-left and bottom-right) using base resolution
+HP_TL,   HP_BR   = (80, 632),  (276, 696)
+STAM_TL, STAM_BR = (80, 664),  (276, 729)
+RAIL_TL, RAIL_BR = (80, 725),  (276, 755)
+STYLE_TEXT_TL, STYLE_TEXT_BR = (780, 155), (950, 210)
+STYLE_BAR_TL,  STYLE_BAR_BR  = (780, 230), (1020, 265)
+
+# Style rank colors in RGB space
+STYLE_COLORS = {
+    "DESTRUCTIVE": (0, 110, 255),
+    "CHAOTIC": (50, 255, 50),
+    "BRUTAL": (255, 235, 30),
+    "ANARCHIC": (255, 140, 30),
+    "SUPREME": (220, 0, 0),
+    "SSADISTIC": (220, 0, 0),
+    "SSSHITSTORM": (220, 0, 0),
+    "ULTRAKILL": (255, 220, 70),
+}
+
+# Rewards when a new style rank appears
+STYLE_REWARD = {
+    "ULTRAKILL": 20.0,
+    "SSSHITSTORM": 15.0,
+    "SSADISTIC": 10.0,
+    "SUPREME": 5.0,
+    "ANARCHIC": 0.0,
+    "BRUTAL": -1.0,
+    "CHAOTIC": -1.0,
+    "DESTRUCTIVE": -1.0,
+}
+
 # ───────────
 class UltraKillEnv:
-    def __init__(self, res=(84,84), mouse=False, mouse_scale=30):
     def __init__(self, res=(1024,768), mouse=False, mouse_scale=30):
         """Initialize env.
 
@@ -43,7 +79,10 @@ class UltraKillEnv:
         self.frames_look_down = 0
         self.frames_look_up   = 0
 
-        self.observation_space = spaces.Box(0,255,shape=(3,*res),dtype=np.uint8)
+        w, h = res
+        self.observation_space = spaces.Box(
+            0, 255, shape=(3, h, w), dtype=np.uint8
+        )
         if mouse:
             self.action_space = spaces.Box(-1.0, 1.0,
                                           shape=(len(A_KEYS)+2,),
@@ -51,17 +90,82 @@ class UltraKillEnv:
         else:
             self.action_space = spaces.MultiBinary(len(A_KEYS))
 
-        self.sct = mss.mss();  self.mon = self.sct.monitors[1]
+        self.sct = mss.mss()
+        # keep original monitor handle for backward compatibility
+        self.mon = self.sct.monitors[1]
+        self.win_bbox = None
+        self._update_window()
+
+        self._exit = False
+        self.listener = keyboard.GlobalHotKeys(
+            {'<ctrl>+<alt>+x': self._set_exit}
+        )
+        self.listener.start()
 
         # prev-состояние для reward
         self._reset_prev()
         self.frames_since_slot = 0
         self.prev_slot         = None
 
+        self._ensure_process()
+
     # ---------------- utils ----------------
     def _grab(self):
-        scr = np.asarray(self.sct.grab(self.mon))[:,:,:3]         # BGR
+        self._ensure_process()
+        self._ensure_window()
+        self._check_exit()
+        scr = np.asarray(self.sct.grab(self.win_bbox))[:, :, :3]
+        scr = cv2.cvtColor(scr, cv2.COLOR_BGR2RGB)
         return cv2.resize(scr, self.res, interpolation=cv2.INTER_AREA)
+
+    def _ensure_process(self):
+        """Raise RuntimeError if ULTRAKILL.exe is not running."""
+        self._check_exit()
+        for proc in psutil.process_iter(["name"]):
+            if proc.info.get("name", "").lower() == "ultrakill.exe":
+                return
+        raise RuntimeError("ULTRAKILL.exe process not found")
+
+    def _ensure_window(self):
+        """Ensure the cached bounding box is available."""
+        if self.win_bbox is None:
+            self._update_window()
+
+    def _update_window(self):
+        """Cache the coordinates of the ULTRAKILL window."""
+        wins = [w for w in gw.getAllTitles() if "ULTRAKILL" in w.upper()]
+        if not wins:
+            raise RuntimeError("ULTRAKILL window not found")
+        win = gw.getWindowsWithTitle(wins[0])[0]
+        self.win_bbox = {
+            "left": win.left,
+            "top": win.top,
+            "width": win.width,
+            "height": win.height,
+        }
+
+    def _scale_coords(self, tl, br):
+        """Return scaled x1,y1,x2,y2 for the current resolution."""
+        w, h = self.res
+        x1 = int(tl[0] * w / BASE_W)
+        y1 = int(tl[1] * h / BASE_H)
+        x2 = int(br[0] * w / BASE_W)
+        y2 = int(br[1] * h / BASE_H)
+        return x1, y1, x2, y2
+
+    def _crop(self, frame, tl, br):
+        """Crop HUD region from frame using base coordinates."""
+        x1, y1, x2, y2 = self._scale_coords(tl, br)
+        return frame[y1:y2, x1:x2]
+
+    def _set_exit(self):
+        self._exit = True
+
+    def _check_exit(self):
+        if getattr(self, "_exit", False):
+            if hasattr(self, "listener"):
+                self.listener.stop()
+            raise SystemExit("Exit hotkey pressed")
 
     def _reset_prev(self):
         self.prev_hp = 1.0
@@ -77,9 +181,11 @@ class UltraKillEnv:
         self.rank_seen = False            # scoreboard rank not yet processed
         self.frames_look_down = 0
         self.frames_look_up   = 0
+        self.prev_style_rank = None
 
     # ---------------- Gym API --------------
     def reset(self, *, seed=None, options=None):
+        self._ensure_process()
         self._reset_prev()
         self.frames_since_slot = 0
         self.prev_slot = None
@@ -87,6 +193,7 @@ class UltraKillEnv:
 
     def step(self, action):
         """Send actions and compute reward."""
+        self._ensure_process()
         # --- клавиши и мышь ---
         dx = dy = 0
         if self.mouse and len(action) >= len(A_KEYS)+2:
@@ -107,21 +214,22 @@ class UltraKillEnv:
         time.sleep(0.016)                              # ~60 FPS
 
         # --- наблюдение ---
-        frame = self._grab()                           # BGR 84×84×3
         frame = self._grab()
         obs   = frame.transpose(2,0,1)
-        hp    = frame[76:80,  2:16, 2].mean()/255      # красная полоска
-        dash  = frame[80:82,  2:16, 0].mean()/255      # голубой dash
-        rail  = frame[82:83,  2:16, 1].mean()/255      # бирюза rail
-        style = (frame[14:23, 67:83, :] > 200).sum()   # белые буквы
         w, h  = self.res
-        hp    = frame[int(h*76/84):int(h*80/84),  int(w*2/84):int(w*16/84), 2].mean()/255
-        dash  = frame[int(h*80/84):int(h*82/84), int(w*2/84):int(w*16/84), 0].mean()/255
-        rail  = frame[int(h*82/84):int(h*83/84), int(w*2/84):int(w*16/84), 1].mean()/255
-        style = (frame[int(h*14/84):int(h*23/84), int(w*67/84):int(w*83/84), :] > 200).sum()
+        x1, y1, x2, y2 = self._scale_coords(HP_TL, HP_BR)
+        hp = frame[y1:y2, x1:x2, 0].mean() / 255
+        x1, y1, x2, y2 = self._scale_coords(STAM_TL, STAM_BR)
+        dash = frame[y1:y2, x1:x2, 2].mean() / 255
+        x1, y1, x2, y2 = self._scale_coords(RAIL_TL, RAIL_BR)
+        rail = frame[y1:y2, x1:x2, 1].mean() / 255
+        style_region = self._crop(frame, STYLE_BAR_TL, STYLE_BAR_BR)
+        style = (style_region > 200).sum()
+        rank_patch = self._crop(frame, STYLE_TEXT_TL, STYLE_TEXT_BR)
+        avg_color = rank_patch.mean(axis=(0, 1))
+        style_rank = min(STYLE_COLORS, key=lambda k: np.linalg.norm(avg_color - np.array(STYLE_COLORS[k])))
         flash = frame.mean() > 240
         dark  = frame.mean() < 30
-        words = (frame[30:60, 20:64, :] > 200).mean() > 0.02
         words = (frame[int(h*30/84):int(h*60/84), int(w*20/84):int(w*64/84), :] > 200).mean() > 0.02
         dead  = dark and words
         checkpoint = (frame[int(h*24/84):int(h*56/84), int(w*18/84):int(w*66/84), :] > 230).mean() > 0.05
@@ -200,10 +308,19 @@ class UltraKillEnv:
         else:
             self.frames_since_style += 1
 
+        if style_rank != self.prev_style_rank:
+            r += STYLE_REWARD.get(style_rank, 0.0)
+            self.prev_style_rank = style_rank
+
         if self.frames_since_style > 30 and (action[7] or action[8]):
             r -= 0.1                                # стрельба без врагов
 
         r += (rail - self.prev_rail) * 2.0          # заряд rail
+
+        # bonus for active movement
+        r += 0.05 * float(action[IDX_SPACE])
+        r += 0.05 * float(action[IDX_SHIFT])
+        r += 0.05 * float(action[IDX_CTRL])
 
         if action[IDX_SHIFT] and hp_loss == 0:
             r += 0.5                                # уворот без получения урона
@@ -225,16 +342,15 @@ class UltraKillEnv:
         cur_slot = None
         variant_switch = False
         for i in range(5):                 # слоты 1-5
-            if action[SLOT_OFF+i]:
             pressed = action[SLOT_OFF+i] > 0
             if pressed and cur_slot is None:
                 cur_slot = i
-        if cur_slot is not None and cur_slot != self.prev_slot:
-            r += 0.5                       # бонус за смену
-            self.frames_since_slot = 0
             if pressed and i == self.prev_slot and not self.prev_slot_pressed[i]:
                 variant_switch = True
             self.prev_slot_pressed[i] = pressed
+        if cur_slot is not None and cur_slot != self.prev_slot:
+            r += 0.5                       # бонус за смену
+            self.frames_since_slot = 0
 
         if cur_slot is not None:
             if variant_switch:
@@ -252,13 +368,19 @@ class UltraKillEnv:
         # --- save prev ---
         self.prev_hp, self.prev_dash  = hp, dash
         self.prev_rail, self.prev_style = rail, style
+        self.prev_style_rank = style_rank
         self.prev_flash = flash
         self.prev_dead = dead
         self.prev_frame = frame
 
         return obs, r, False, False, {}    # (no terminal flag yet)
 
-    def render(self, *a, **kw): pass
+    def render(self, *a, **kw):
+        pass
+
+    def close(self):
+        if hasattr(self, "listener"):
+            self.listener.stop()
 # --------------------------------------------------------------------
 #  Minimal Gym-обёртка, чтобы SB3 не ругался
 # --------------------------------------------------------------------
@@ -278,4 +400,4 @@ class UltraKillWrapper(gym.Env):
     def render(self, *a, **kw):
         return None
     def close(self):
-        pass
+        self.core.close()
