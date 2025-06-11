@@ -43,6 +43,16 @@ STYLE_COLORS = {
     "SSADISTIC": (220, 0, 0),
     "SSSHITSTORM": (220, 0, 0),
     "ULTRAKILL": (255, 220, 70),
+# Approximate BGR colors for style ranks
+STYLE_COLORS = {
+    "DESTRUCTIVE": (255, 110, 0),
+    "CHAOTIC": (50, 255, 50),
+    "BRUTAL": (30, 235, 255),
+    "ANARCHIC": (30, 140, 255),
+    "SUPREME": (0, 0, 220),
+    "SSADISTIC": (0, 0, 220),
+    "SSSHITSTORM": (0, 0, 220),
+    "ULTRAKILL": (70, 220, 255),
 }
 
 # Rewards when a new style rank appears
@@ -116,6 +126,8 @@ class UltraKillEnv:
         self._check_exit()
         scr = np.asarray(self.sct.grab(self.win_bbox))[:, :, :3]
         scr = cv2.cvtColor(scr, cv2.COLOR_BGR2RGB)
+        scr = np.asarray(self.sct.grab(self.win_bbox))[:, :, :3]  # BGR
+        scr = np.asarray(self.sct.grab(self.mon))[:,:,:3]         # BGR
         return cv2.resize(scr, self.res, interpolation=cv2.INTER_AREA)
 
     def _ensure_process(self):
@@ -221,6 +233,9 @@ class UltraKillEnv:
         hp = frame[y1:y2, x1:x2, 0].mean() / 255
         x1, y1, x2, y2 = self._scale_coords(STAM_TL, STAM_BR)
         dash = frame[y1:y2, x1:x2, 2].mean() / 255
+        hp = frame[y1:y2, x1:x2, 2].mean() / 255
+        x1, y1, x2, y2 = self._scale_coords(STAM_TL, STAM_BR)
+        dash = frame[y1:y2, x1:x2, 0].mean() / 255
         x1, y1, x2, y2 = self._scale_coords(RAIL_TL, RAIL_BR)
         rail = frame[y1:y2, x1:x2, 1].mean() / 255
         style_region = self._crop(frame, STYLE_BAR_TL, STYLE_BAR_BR)
