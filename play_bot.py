@@ -8,6 +8,7 @@ model=PPO.load(a.weights,env=env,device='cuda' if torch.cuda.is_available() else
 obs,_=env.reset()
 while True:
     action,_=model.predict(obs,deterministic=True)
-    obs,_,done,_,_=env.step(action)
-    if done: obs,_=env.reset()
+    obs,_,terminated,_,_=env.step(action)
+    if terminated:
+        obs,_=env.reset()
     time.sleep(0.016)
