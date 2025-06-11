@@ -1,5 +1,3 @@
-@@ -2,184 +2,270 @@
-
 try:
     import gym                           # старый OpenAI Gym
 except ImportError:
@@ -130,8 +128,9 @@ class UltraKillEnv:
 
         # --- vertical look estimate via brightness profile ---
         vert_profile = frame.mean(axis=2).mean(axis=1)
-        top_b  = vert_profile[:20].mean()
-        bot_b  = vert_profile[-20:].mean()
+        band = max(1, int(h * 0.1))
+        top_b = vert_profile[:band].mean()
+        bot_b = vert_profile[-band:].mean()
         if bot_b - top_b > 5:
             self.frames_look_down += 1
             self.frames_look_up = 0
