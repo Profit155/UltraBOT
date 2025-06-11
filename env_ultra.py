@@ -33,6 +33,16 @@ RAIL_TL, RAIL_BR = (80, 725),  (276, 755)
 STYLE_TEXT_TL, STYLE_TEXT_BR = (780, 155), (950, 210)
 STYLE_BAR_TL,  STYLE_BAR_BR  = (780, 230), (1020, 265)
 
+# Style rank colors in RGB space
+STYLE_COLORS = {
+    "DESTRUCTIVE": (0, 110, 255),
+    "CHAOTIC": (50, 255, 50),
+    "BRUTAL": (255, 235, 30),
+    "ANARCHIC": (255, 140, 30),
+    "SUPREME": (220, 0, 0),
+    "SSADISTIC": (220, 0, 0),
+    "SSSHITSTORM": (220, 0, 0),
+    "ULTRAKILL": (255, 220, 70),
 # Approximate BGR colors for style ranks
 STYLE_COLORS = {
     "DESTRUCTIVE": (255, 110, 0),
@@ -91,6 +101,8 @@ class UltraKillEnv:
             self.action_space = spaces.MultiBinary(len(A_KEYS))
 
         self.sct = mss.mss()
+        # keep original monitor handle for backward compatibility
+        self.mon = self.sct.monitors[1]
         self.win_bbox = None
         self._update_window()
 
@@ -112,6 +124,8 @@ class UltraKillEnv:
         self._ensure_process()
         self._ensure_window()
         self._check_exit()
+        scr = np.asarray(self.sct.grab(self.win_bbox))[:, :, :3]
+        scr = cv2.cvtColor(scr, cv2.COLOR_BGR2RGB)
         scr = np.asarray(self.sct.grab(self.win_bbox))[:, :, :3]  # BGR
         scr = np.asarray(self.sct.grab(self.mon))[:,:,:3]         # BGR
         return cv2.resize(scr, self.res, interpolation=cv2.INTER_AREA)
@@ -216,6 +230,9 @@ class UltraKillEnv:
         obs   = frame.transpose(2,0,1)
         w, h  = self.res
         x1, y1, x2, y2 = self._scale_coords(HP_TL, HP_BR)
+        hp = frame[y1:y2, x1:x2, 0].mean() / 255
+        x1, y1, x2, y2 = self._scale_coords(STAM_TL, STAM_BR)
+        dash = frame[y1:y2, x1:x2, 2].mean() / 255
         hp = frame[y1:y2, x1:x2, 2].mean() / 255
         x1, y1, x2, y2 = self._scale_coords(STAM_TL, STAM_BR)
         dash = frame[y1:y2, x1:x2, 0].mean() / 255
