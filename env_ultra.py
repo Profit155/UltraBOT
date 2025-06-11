@@ -79,6 +79,7 @@ class UltraKillEnv:
         self._ensure_window()
         self._check_exit()
         scr = np.asarray(self.sct.grab(self.win_bbox))[:, :, :3]  # BGR
+        scr = np.asarray(self.sct.grab(self.mon))[:,:,:3]         # BGR
         return cv2.resize(scr, self.res, interpolation=cv2.INTER_AREA)
 
     def _ensure_process(self):
