@@ -40,6 +40,9 @@ class UltraKillEnv:
         self.res = res
         self.mouse = mouse
         self.mouse_scale = mouse_scale
+        # orientation penalty counters
+        self.frames_look_down = 0
+        self.frames_look_up   = 0
 
         self.observation_space = spaces.Box(0,255,shape=(3,*res),dtype=np.uint8)
         if mouse:
@@ -73,6 +76,8 @@ class UltraKillEnv:
         self.prev_slot_pressed = [False]*5
         self.frames_since_style = 0       # frames since last style gain
         self.rank_seen = False            # scoreboard rank not yet processed
+        self.frames_look_down = 0
+        self.frames_look_up   = 0
 
     # ---------------- Gym API --------------
     def reset(self, *, seed=None, options=None):
@@ -115,6 +120,20 @@ class UltraKillEnv:
         words = (frame[int(h*30/84):int(h*60/84), int(w*20/84):int(w*64/84), :] > 200).mean() > 0.02
         dead  = dark and words
         checkpoint = (frame[int(h*24/84):int(h*56/84), int(w*18/84):int(w*66/84), :] > 230).mean() > 0.05
+
+        # --- vertical look estimate via brightness profile ---
+        vert_profile = frame.mean(axis=2).mean(axis=1)
+        top_b  = vert_profile[:20].mean()
+        bot_b  = vert_profile[-20:].mean()
+        if bot_b - top_b > 5:
+            self.frames_look_down += 1
+            self.frames_look_up = 0
+        elif top_b - bot_b > 5:
+            self.frames_look_up += 1
+            self.frames_look_down = 0
+        else:
+            self.frames_look_down = 0
+            self.frames_look_up = 0
 
         # --- reward ---
         r = 0.0
@@ -188,6 +207,12 @@ class UltraKillEnv:
 
         if flash and not self.prev_flash:
             r += 5.0                                # парри
+
+        # penalize keeping the view pitched up or down for long
+        if self.frames_look_down > 60:
+            r -= 0.05
+        if self.frames_look_up > 60:
+            r -= 0.05
 
         # --- смена оружия ---
         cur_slot = None

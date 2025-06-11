@@ -18,3 +18,7 @@ points to encourage flashy play and help detect combo kills. Shooting when no
 style was gained for a while incurs a small penalty so the bot does not fire
 blindly. Movement that noticeably changes the scene grants a tiny reward each
 frame so the agent keeps advancing through the map.
+The environment also estimates whether the camera is pointed
+too far up or down by comparing the brightness of the top and bottom
+rows of the screen. Keeping such an orientation for over a second results
+in a small penalty.
