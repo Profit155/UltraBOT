@@ -24,7 +24,7 @@ MOUSE_AXES = 2                       # dx,dy appended when mouse=True
 
 # ───────────
 class UltraKillEnv:
-    def __init__(self, res=(84,84), mouse=False, mouse_scale=30):
+    def __init__(self, res=(1024,768), mouse=False, mouse_scale=30):
         """Initialize env.
 
         Parameters
@@ -72,6 +72,7 @@ class UltraKillEnv:
         self.checkpoint_active = False    # checkpoint text currently visible
         self.prev_slot_pressed = [False]*5
         self.frames_since_style = 0       # frames since last style gain
+        self.rank_seen = False            # scoreboard rank not yet processed
 
     # ---------------- Gym API --------------
     def reset(self, *, seed=None, options=None):
@@ -102,17 +103,18 @@ class UltraKillEnv:
         time.sleep(0.016)                              # ~60 FPS
 
         # --- наблюдение ---
-        frame = self._grab()                           # BGR 84×84×3
+        frame = self._grab()
         obs   = frame.transpose(2,0,1)
-        hp    = frame[76:80,  2:16, 2].mean()/255      # красная полоска
-        dash  = frame[80:82,  2:16, 0].mean()/255      # голубой dash
-        rail  = frame[82:83,  2:16, 1].mean()/255      # бирюза rail
-        style = (frame[14:23, 67:83, :] > 200).sum()   # белые буквы
+        w, h  = self.res
+        hp    = frame[int(h*76/84):int(h*80/84),  int(w*2/84):int(w*16/84), 2].mean()/255
+        dash  = frame[int(h*80/84):int(h*82/84), int(w*2/84):int(w*16/84), 0].mean()/255
+        rail  = frame[int(h*82/84):int(h*83/84), int(w*2/84):int(w*16/84), 1].mean()/255
+        style = (frame[int(h*14/84):int(h*23/84), int(w*67/84):int(w*83/84), :] > 200).sum()
         flash = frame.mean() > 240
         dark  = frame.mean() < 30
-        words = (frame[30:60, 20:64, :] > 200).mean() > 0.02
+        words = (frame[int(h*30/84):int(h*60/84), int(w*20/84):int(w*64/84), :] > 200).mean() > 0.02
         dead  = dark and words
-        checkpoint = (frame[24:56, 18:66, :] > 230).mean() > 0.05
+        checkpoint = (frame[int(h*24/84):int(h*56/84), int(w*18/84):int(w*66/84), :] > 230).mean() > 0.05
 
         # --- reward ---
         r = 0.0
@@ -120,13 +122,14 @@ class UltraKillEnv:
         # exploration based on frame difference
         if self.prev_frame is not None:
             diff = np.mean(np.abs(frame - self.prev_frame))
-            if diff < 2.0:
+            if diff < 1.0:
                 self.stuck_frames += 1
                 if self.stuck_frames > 180:
-                    r -= 0.1                     # penalty for staying still
+                    r -= 0.2                     # penalty for staying still
             else:
+                r += diff / 50.0                # encourage movement
                 if diff > 20.0:
-                    r += 1.0                     # new area or big change
+                    r += 1.0                     # likely entered new area
                 self.stuck_frames = 0
 
         # checkpoint detection (white "CHECKPOINT" text)
@@ -135,6 +138,20 @@ class UltraKillEnv:
             self.checkpoint_active = True
         elif not checkpoint:
             self.checkpoint_active = False
+
+        # end-level rank detection (big letter in center)
+        rank_area = frame[int(h*30/84):int(h*54/84), int(w*28/84):int(w*56/84), :]
+        rank_brightness = rank_area.mean()
+        if rank_brightness > 170 and not getattr(self, "rank_seen", False):
+            if rank_brightness > 240:
+                r += 50.0  # P rank
+            elif rank_brightness > 210:
+                r += 30.0  # S or A
+            elif rank_brightness > 190:
+                r += 10.0  # B
+            else:
+                r -= 5.0   # C or worse
+            self.rank_seen = True
         hp_loss = self.prev_hp - hp
         if hp_loss > 0:
             r -= hp_loss * 5.0                      # сильное наказание за урон
