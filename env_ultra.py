@@ -5,6 +5,7 @@ except ImportError:
 
 from gym import spaces
 import numpy as np, cv2, mss, time, pydirectinput
+import psutil
 # ─────────── action-space (17 бинарных кнопок) ───────────
 A_KEYS = [
     'w','a','s','d',          # 0-3  движение
@@ -60,10 +61,20 @@ class UltraKillEnv:
         self.frames_since_slot = 0
         self.prev_slot         = None
 
+        self._ensure_process()
+
     # ---------------- utils ----------------
     def _grab(self):
+        self._ensure_process()
         scr = np.asarray(self.sct.grab(self.mon))[:,:,:3]         # BGR
         return cv2.resize(scr, self.res, interpolation=cv2.INTER_AREA)
+
+    def _ensure_process(self):
+        """Raise RuntimeError if ULTRAKILL.exe is not running."""
+        for proc in psutil.process_iter(["name"]):
+            if proc.info.get("name", "").lower() == "ultrakill.exe":
+                return
+        raise RuntimeError("ULTRAKILL.exe process not found")
 
     def _reset_prev(self):
         self.prev_hp = 1.0
@@ -82,6 +93,7 @@ class UltraKillEnv:
 
     # ---------------- Gym API --------------
     def reset(self, *, seed=None, options=None):
+        self._ensure_process()
         self._reset_prev()
         self.frames_since_slot = 0
         self.prev_slot = None
@@ -89,6 +101,7 @@ class UltraKillEnv:
 
     def step(self, action):
         """Send actions and compute reward."""
+        self._ensure_process()
         # --- клавиши и мышь ---
         dx = dy = 0
         if self.mouse and len(action) >= len(A_KEYS)+2:
