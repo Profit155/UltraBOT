@@ -11,7 +11,7 @@ import numpy as np, cv2, mss, time, pydirectinput
 A_KEYS = [
     'w','a','s','d',          # 0-3  движение
     'space','shift','ctrl',   # 4-6  jump / dash / slide
-    'left','right',           # 7-8  Primary / Alt fire
+    'left','right',           # 7-8  LMB / RMB
     '1','2','3','4','5',      # 9-13 weapon slots
     'r','f','g'               # 14-16 hook / parry / knuckle
 ]
@@ -20,13 +20,35 @@ IDX_SPACE = A_KEYS.index('space')
 IDX_SHIFT = A_KEYS.index('shift')
 IDX_CTRL  = A_KEYS.index('ctrl')
 SLOT_OFF  = 9                        # индекс первого слота '1'
+MOUSE_AXES = 2                       # dx,dy appended when mouse=True
 
 # ───────────
 class UltraKillEnv:
-    def __init__(self, res=(84,84)):
+    def __init__(self, res=(84,84), mouse=False, mouse_scale=30):
+        """Initialize env.
+
+        Parameters
+        ----------
+        res : tuple
+            Resolution of grabbed screen.
+        mouse : bool
+            If True, the action space includes relative mouse movement
+            (dx, dy) in range [-1,1].
+        mouse_scale : int
+            Pixel multiplier for mouse movement per step.
+        """
         self.res = res
+        self.mouse = mouse
+        self.mouse_scale = mouse_scale
+
         self.observation_space = spaces.Box(0,255,shape=(3,*res),dtype=np.uint8)
-        self.action_space      = spaces.MultiBinary(len(A_KEYS))
+        if mouse:
+            self.action_space = spaces.Box(-1.0, 1.0,
+                                          shape=(len(A_KEYS)+2,),
+                                          dtype=np.float32)
+        else:
+            self.action_space = spaces.MultiBinary(len(A_KEYS))
+
         self.sct = mss.mss();  self.mon = self.sct.monitors[1]
 
         # prev-состояние для reward
@@ -54,9 +76,23 @@ class UltraKillEnv:
         return self._grab().transpose(2,0,1), {}
 
     def step(self, action):
-        # --- клавиши ---
-        for i,key in enumerate(A_KEYS):
-            (pydirectinput.keyDown if action[i] else pydirectinput.keyUp)(key)
+        """Send actions and compute reward."""
+        # --- клавиши и мышь ---
+        dx = dy = 0
+        if self.mouse and len(action) >= len(A_KEYS)+2:
+            dx = int(float(action[len(A_KEYS)])   * self.mouse_scale)
+            dy = int(float(action[len(A_KEYS)+1]) * self.mouse_scale)
+
+        for i, key in enumerate(A_KEYS):
+            pressed = action[i] > 0
+            if key in ('left', 'right'):
+                btn = 'left' if key == 'left' else 'right'
+                (pydirectinput.mouseDown if pressed else pydirectinput.mouseUp)(button=btn)
+            else:
+                (pydirectinput.keyDown if pressed else pydirectinput.keyUp)(key)
+
+        if dx or dy:
+            pydirectinput.moveRel(dx, dy)
 
         time.sleep(0.016)                              # ~60 FPS
 
@@ -132,9 +168,9 @@ class UltraKillEnv:
 import gym
 class UltraKillWrapper(gym.Env):
     metadata = {"render_modes": []}
-    def __init__(self):
+    def __init__(self, mouse=False, mouse_scale=30):
         super().__init__()
-        self.core = UltraKillEnv()
+        self.core = UltraKillEnv(mouse=mouse, mouse_scale=mouse_scale)
         self.action_space      = self.core.action_space
         self.observation_space = self.core.observation_space
     def reset(self, seed=None, options=None):
