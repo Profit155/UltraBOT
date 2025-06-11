@@ -6,6 +6,8 @@ except ImportError:
 from gym import spaces
 import numpy as np, cv2, mss, time, pydirectinput
 import psutil
+import pygetwindow as gw
+from pynput import keyboard
 # ─────────── action-space (17 бинарных кнопок) ───────────
 A_KEYS = [
     'w','a','s','d',          # 0-3  движение
@@ -54,7 +56,15 @@ class UltraKillEnv:
         else:
             self.action_space = spaces.MultiBinary(len(A_KEYS))
 
-        self.sct = mss.mss();  self.mon = self.sct.monitors[1]
+        self.sct = mss.mss()
+        self.win_bbox = None
+        self._update_window()
+
+        self._exit = False
+        self.listener = keyboard.GlobalHotKeys(
+            {'<ctrl>+<alt>+x': self._set_exit}
+        )
+        self.listener.start()
 
         # prev-состояние для reward
         self._reset_prev()
@@ -66,15 +76,46 @@ class UltraKillEnv:
     # ---------------- utils ----------------
     def _grab(self):
         self._ensure_process()
+        self._ensure_window()
+        self._check_exit()
+        scr = np.asarray(self.sct.grab(self.win_bbox))[:, :, :3]  # BGR
         scr = np.asarray(self.sct.grab(self.mon))[:,:,:3]         # BGR
         return cv2.resize(scr, self.res, interpolation=cv2.INTER_AREA)
 
     def _ensure_process(self):
         """Raise RuntimeError if ULTRAKILL.exe is not running."""
+        self._check_exit()
         for proc in psutil.process_iter(["name"]):
             if proc.info.get("name", "").lower() == "ultrakill.exe":
                 return
         raise RuntimeError("ULTRAKILL.exe process not found")
+
+    def _ensure_window(self):
+        """Ensure the cached bounding box is available."""
+        if self.win_bbox is None:
+            self._update_window()
+
+    def _update_window(self):
+        """Cache the coordinates of the ULTRAKILL window."""
+        wins = [w for w in gw.getAllTitles() if "ULTRAKILL" in w.upper()]
+        if not wins:
+            raise RuntimeError("ULTRAKILL window not found")
+        win = gw.getWindowsWithTitle(wins[0])[0]
+        self.win_bbox = {
+            "left": win.left,
+            "top": win.top,
+            "width": win.width,
+            "height": win.height,
+        }
+
+    def _set_exit(self):
+        self._exit = True
+
+    def _check_exit(self):
+        if getattr(self, "_exit", False):
+            if hasattr(self, "listener"):
+                self.listener.stop()
+            raise SystemExit("Exit hotkey pressed")
 
     def _reset_prev(self):
         self.prev_hp = 1.0
@@ -266,7 +307,12 @@ class UltraKillEnv:
 
         return obs, r, False, False, {}    # (no terminal flag yet)
 
-    def render(self, *a, **kw): pass
+    def render(self, *a, **kw):
+        pass
+
+    def close(self):
+        if hasattr(self, "listener"):
+            self.listener.stop()
 # --------------------------------------------------------------------
 #  Minimal Gym-обёртка, чтобы SB3 не ругался
 # --------------------------------------------------------------------
@@ -286,4 +332,4 @@ class UltraKillWrapper(gym.Env):
     def render(self, *a, **kw):
         return None
     def close(self):
-        pass
+        self.core.close()
