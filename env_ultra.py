@@ -23,6 +23,40 @@ IDX_CTRL  = A_KEYS.index('ctrl')
 SLOT_OFF  = 9                        # индекс первого слота '1'
 MOUSE_AXES = 2                       # dx,dy appended when mouse=True
 
+# Base resolution for scaling HUD coordinates
+BASE_W, BASE_H = 1024, 768
+
+# HUD element coordinates (top-left and bottom-right) using base resolution
+HP_TL,   HP_BR   = (80, 632),  (276, 696)
+STAM_TL, STAM_BR = (80, 664),  (276, 729)
+RAIL_TL, RAIL_BR = (80, 725),  (276, 755)
+STYLE_TEXT_TL, STYLE_TEXT_BR = (780, 155), (950, 210)
+STYLE_BAR_TL,  STYLE_BAR_BR  = (780, 230), (1020, 265)
+
+# Approximate BGR colors for style ranks
+STYLE_COLORS = {
+    "DESTRUCTIVE": (255, 110, 0),
+    "CHAOTIC": (50, 255, 50),
+    "BRUTAL": (30, 235, 255),
+    "ANARCHIC": (30, 140, 255),
+    "SUPREME": (0, 0, 220),
+    "SSADISTIC": (0, 0, 220),
+    "SSSHITSTORM": (0, 0, 220),
+    "ULTRAKILL": (70, 220, 255),
+}
+
+# Rewards when a new style rank appears
+STYLE_REWARD = {
+    "ULTRAKILL": 20.0,
+    "SSSHITSTORM": 15.0,
+    "SSADISTIC": 10.0,
+    "SUPREME": 5.0,
+    "ANARCHIC": 0.0,
+    "BRUTAL": -1.0,
+    "CHAOTIC": -1.0,
+    "DESTRUCTIVE": -1.0,
+}
+
 # ───────────
 class UltraKillEnv:
     def __init__(self, res=(1024,768), mouse=False, mouse_scale=30):
@@ -82,10 +116,32 @@ class UltraKillEnv:
         scr = np.asarray(self.sct.grab(self.mon))[:,:,:3]         # BGR
         return cv2.resize(scr, self.res, interpolation=cv2.INTER_AREA)
 
-    def _ensure_process(self):
-        """Raise RuntimeError if ULTRAKILL.exe is not running."""
-        self._check_exit()
-        for proc in psutil.process_iter(["name"]):
+    def _scale_coords(self, tl, br):
+        """Return scaled x1,y1,x2,y2 for the current resolution."""
+        w, h = self.res
+        x1 = int(tl[0] * w / BASE_W)
+        y1 = int(tl[1] * h / BASE_H)
+        x2 = int(br[0] * w / BASE_W)
+        y2 = int(br[1] * h / BASE_H)
+        return x1, y1, x2, y2
+
+    def _crop(self, frame, tl, br):
+        """Crop HUD region from frame using base coordinates."""
+        x1, y1, x2, y2 = self._scale_coords(tl, br)
+        return frame[y1:y2, x1:x2]
+
+        self.prev_style_rank = None
+        x1, y1, x2, y2 = self._scale_coords(HP_TL, HP_BR)
+        hp = frame[y1:y2, x1:x2, 2].mean() / 255
+        x1, y1, x2, y2 = self._scale_coords(STAM_TL, STAM_BR)
+        dash = frame[y1:y2, x1:x2, 0].mean() / 255
+        x1, y1, x2, y2 = self._scale_coords(RAIL_TL, RAIL_BR)
+        rail = frame[y1:y2, x1:x2, 1].mean() / 255
+        style_region = self._crop(frame, STYLE_BAR_TL, STYLE_BAR_BR)
+        style = (style_region > 200).sum()
+        rank_patch = self._crop(frame, STYLE_TEXT_TL, STYLE_TEXT_BR)
+        avg_color = rank_patch.mean(axis=(0, 1))
+        style_rank = min(STYLE_COLORS, key=lambda k: np.linalg.norm(avg_color - np.array(STYLE_COLORS[k])))
             if proc.info.get("name", "").lower() == "ultrakill.exe":
                 return
         raise RuntimeError("ULTRAKILL.exe process not found")
@@ -224,6 +280,16 @@ class UltraKillEnv:
                 r += 30.0  # S or A
             elif rank_brightness > 190:
                 r += 10.0  # B
+        if style_rank != self.prev_style_rank:
+            r += STYLE_REWARD.get(style_rank, 0.0)
+            self.prev_style_rank = style_rank
+
+        # bonus for active movement
+        r += 0.05 * float(action[IDX_SPACE])
+        r += 0.05 * float(action[IDX_SHIFT])
+        r += 0.05 * float(action[IDX_CTRL])
+
+        self.prev_style_rank = style_rank
             else:
                 r -= 5.0   # C or worse
             self.rank_seen = True
