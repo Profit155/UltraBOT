@@ -23,6 +23,40 @@ IDX_CTRL  = A_KEYS.index('ctrl')
 SLOT_OFF  = 9                        # индекс первого слота '1'
 MOUSE_AXES = 2                       # dx,dy appended when mouse=True
 
+# Base resolution for scaling HUD coordinates
+BASE_W, BASE_H = 1024, 768
+
+# HUD element coordinates (top-left and bottom-right) using base resolution
+HP_TL,   HP_BR   = (80, 632),  (276, 696)
+STAM_TL, STAM_BR = (80, 664),  (276, 729)
+RAIL_TL, RAIL_BR = (80, 725),  (276, 755)
+STYLE_TEXT_TL, STYLE_TEXT_BR = (780, 155), (950, 210)
+STYLE_BAR_TL,  STYLE_BAR_BR  = (780, 230), (1020, 265)
+
+# Approximate BGR colors for style ranks
+STYLE_COLORS = {
+    "DESTRUCTIVE": (255, 110, 0),
+    "CHAOTIC": (50, 255, 50),
+    "BRUTAL": (30, 235, 255),
+    "ANARCHIC": (30, 140, 255),
+    "SUPREME": (0, 0, 220),
+    "SSADISTIC": (0, 0, 220),
+    "SSSHITSTORM": (0, 0, 220),
+    "ULTRAKILL": (70, 220, 255),
+}
+
+# Rewards when a new style rank appears
+STYLE_REWARD = {
+    "ULTRAKILL": 20.0,
+    "SSSHITSTORM": 15.0,
+    "SSADISTIC": 10.0,
+    "SUPREME": 5.0,
+    "ANARCHIC": 0.0,
+    "BRUTAL": -1.0,
+    "CHAOTIC": -1.0,
+    "DESTRUCTIVE": -1.0,
+}
+
 # ───────────
 class UltraKillEnv:
     def __init__(self, res=(1024,768), mouse=False, mouse_scale=30):
@@ -108,6 +142,20 @@ class UltraKillEnv:
             "height": win.height,
         }
 
+    def _scale_coords(self, tl, br):
+        """Return scaled x1,y1,x2,y2 for the current resolution."""
+        w, h = self.res
+        x1 = int(tl[0] * w / BASE_W)
+        y1 = int(tl[1] * h / BASE_H)
+        x2 = int(br[0] * w / BASE_W)
+        y2 = int(br[1] * h / BASE_H)
+        return x1, y1, x2, y2
+
+    def _crop(self, frame, tl, br):
+        """Crop HUD region from frame using base coordinates."""
+        x1, y1, x2, y2 = self._scale_coords(tl, br)
+        return frame[y1:y2, x1:x2]
+
     def _set_exit(self):
         self._exit = True
 
@@ -131,6 +179,7 @@ class UltraKillEnv:
         self.rank_seen = False            # scoreboard rank not yet processed
         self.frames_look_down = 0
         self.frames_look_up   = 0
+        self.prev_style_rank = None
 
     # ---------------- Gym API --------------
     def reset(self, *, seed=None, options=None):
@@ -166,10 +215,17 @@ class UltraKillEnv:
         frame = self._grab()
         obs   = frame.transpose(2,0,1)
         w, h  = self.res
-        hp    = frame[int(h*76/84):int(h*80/84),  int(w*2/84):int(w*16/84), 2].mean()/255
-        dash  = frame[int(h*80/84):int(h*82/84), int(w*2/84):int(w*16/84), 0].mean()/255
-        rail  = frame[int(h*82/84):int(h*83/84), int(w*2/84):int(w*16/84), 1].mean()/255
-        style = (frame[int(h*14/84):int(h*23/84), int(w*67/84):int(w*83/84), :] > 200).sum()
+        x1, y1, x2, y2 = self._scale_coords(HP_TL, HP_BR)
+        hp = frame[y1:y2, x1:x2, 2].mean() / 255
+        x1, y1, x2, y2 = self._scale_coords(STAM_TL, STAM_BR)
+        dash = frame[y1:y2, x1:x2, 0].mean() / 255
+        x1, y1, x2, y2 = self._scale_coords(RAIL_TL, RAIL_BR)
+        rail = frame[y1:y2, x1:x2, 1].mean() / 255
+        style_region = self._crop(frame, STYLE_BAR_TL, STYLE_BAR_BR)
+        style = (style_region > 200).sum()
+        rank_patch = self._crop(frame, STYLE_TEXT_TL, STYLE_TEXT_BR)
+        avg_color = rank_patch.mean(axis=(0, 1))
+        style_rank = min(STYLE_COLORS, key=lambda k: np.linalg.norm(avg_color - np.array(STYLE_COLORS[k])))
         flash = frame.mean() > 240
         dark  = frame.mean() < 30
         words = (frame[int(h*30/84):int(h*60/84), int(w*20/84):int(w*64/84), :] > 200).mean() > 0.02
@@ -250,10 +306,19 @@ class UltraKillEnv:
         else:
             self.frames_since_style += 1
 
+        if style_rank != self.prev_style_rank:
+            r += STYLE_REWARD.get(style_rank, 0.0)
+            self.prev_style_rank = style_rank
+
         if self.frames_since_style > 30 and (action[7] or action[8]):
             r -= 0.1                                # стрельба без врагов
 
         r += (rail - self.prev_rail) * 2.0          # заряд rail
+
+        # bonus for active movement
+        r += 0.05 * float(action[IDX_SPACE])
+        r += 0.05 * float(action[IDX_SHIFT])
+        r += 0.05 * float(action[IDX_CTRL])
 
         if action[IDX_SHIFT] and hp_loss == 0:
             r += 0.5                                # уворот без получения урона
@@ -301,6 +366,7 @@ class UltraKillEnv:
         # --- save prev ---
         self.prev_hp, self.prev_dash  = hp, dash
         self.prev_rail, self.prev_style = rail, style
+        self.prev_style_rank = style_rank
         self.prev_flash = flash
         self.prev_dead = dead
         self.prev_frame = frame
