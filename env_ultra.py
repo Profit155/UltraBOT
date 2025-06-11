@@ -1,4 +1,4 @@
-# env_ultra.py — RL-обёртка ULTRAKILL V1
+@@ -2,184 +2,270 @@
 
 try:
     import gym                           # старый OpenAI Gym
@@ -25,6 +25,7 @@ MOUSE_AXES = 2                       # dx,dy appended when mouse=True
 # ───────────
 class UltraKillEnv:
     def __init__(self, res=(84,84), mouse=False, mouse_scale=30):
+    def __init__(self, res=(1024,768), mouse=False, mouse_scale=30):
         """Initialize env.
 
         Parameters
@@ -70,6 +71,12 @@ class UltraKillEnv:
         self.prev_style = 0
         self.prev_flash = False
         self.prev_dead = False
+        self.prev_frame = None            # previous observation frame
+        self.stuck_frames = 0             # number of frames with little change
+        self.checkpoint_active = False    # checkpoint text currently visible
+        self.prev_slot_pressed = [False]*5
+        self.frames_since_style = 0       # frames since last style gain
+        self.rank_seen = False            # scoreboard rank not yet processed
         self.frames_look_down = 0
         self.frames_look_up   = 0
 
@@ -81,21 +88,12 @@ class UltraKillEnv:
         return self._grab().transpose(2,0,1), {}
 
     def step(self, action):
-        """Send actions and compute reward.
-
-        In addition to the usual damage/style rewards, this function
-        discourages keeping the camera pointed straight up or down for
-        extended periods by inspecting frame brightness.
-        """
+        """Send actions and compute reward."""
         # --- клавиши и мышь ---
         dx = dy = 0
         if self.mouse and len(action) >= len(A_KEYS)+2:
             dx = int(float(action[len(A_KEYS)])   * self.mouse_scale)
             dy = int(float(action[len(A_KEYS)+1]) * self.mouse_scale)
-            # clip excessive movement to avoid wild spins
-            mx = int(self.mouse_scale * 0.75)
-            dx = int(np.clip(dx, -mx, mx))
-            dy = int(np.clip(dy, -mx, mx))
 
         for i, key in enumerate(A_KEYS):
             pressed = action[i] > 0
@@ -112,20 +110,25 @@ class UltraKillEnv:
 
         # --- наблюдение ---
         frame = self._grab()                           # BGR 84×84×3
+        frame = self._grab()
         obs   = frame.transpose(2,0,1)
         hp    = frame[76:80,  2:16, 2].mean()/255      # красная полоска
         dash  = frame[80:82,  2:16, 0].mean()/255      # голубой dash
         rail  = frame[82:83,  2:16, 1].mean()/255      # бирюза rail
         style = (frame[14:23, 67:83, :] > 200).sum()   # белые буквы
+        w, h  = self.res
+        hp    = frame[int(h*76/84):int(h*80/84),  int(w*2/84):int(w*16/84), 2].mean()/255
+        dash  = frame[int(h*80/84):int(h*82/84), int(w*2/84):int(w*16/84), 0].mean()/255
+        rail  = frame[int(h*82/84):int(h*83/84), int(w*2/84):int(w*16/84), 1].mean()/255
+        style = (frame[int(h*14/84):int(h*23/84), int(w*67/84):int(w*83/84), :] > 200).sum()
         flash = frame.mean() > 240
         dark  = frame.mean() < 30
         words = (frame[30:60, 20:64, :] > 200).mean() > 0.02
+        words = (frame[int(h*30/84):int(h*60/84), int(w*20/84):int(w*64/84), :] > 200).mean() > 0.02
         dead  = dark and words
+        checkpoint = (frame[int(h*24/84):int(h*56/84), int(w*18/84):int(w*66/84), :] > 230).mean() > 0.05
 
         # --- vertical look estimate via brightness profile ---
-        # bright bottom rows usually mean the camera faces downward and
-        # bright top rows the opposite. Counters accumulate how long
-        # the agent stares down or up to apply a small penalty later.
         vert_profile = frame.mean(axis=2).mean(axis=1)
         top_b  = vert_profile[:20].mean()
         bot_b  = vert_profile[-20:].mean()
@@ -141,6 +144,40 @@ class UltraKillEnv:
 
         # --- reward ---
         r = 0.0
+
+        # exploration based on frame difference
+        if self.prev_frame is not None:
+            diff = np.mean(np.abs(frame - self.prev_frame))
+            if diff < 1.0:
+                self.stuck_frames += 1
+                if self.stuck_frames > 180:
+                    r -= 0.2                     # penalty for staying still
+            else:
+                r += diff / 50.0                # encourage movement
+                if diff > 20.0:
+                    r += 1.0                     # likely entered new area
+                self.stuck_frames = 0
+
+        # checkpoint detection (white "CHECKPOINT" text)
+        if checkpoint and not self.checkpoint_active:
+            r += 10.0
+            self.checkpoint_active = True
+        elif not checkpoint:
+            self.checkpoint_active = False
+
+        # end-level rank detection (big letter in center)
+        rank_area = frame[int(h*30/84):int(h*54/84), int(w*28/84):int(w*56/84), :]
+        rank_brightness = rank_area.mean()
+        if rank_brightness > 170 and not getattr(self, "rank_seen", False):
+            if rank_brightness > 240:
+                r += 50.0  # P rank
+            elif rank_brightness > 210:
+                r += 30.0  # S or A
+            elif rank_brightness > 190:
+                r += 10.0  # B
+            else:
+                r -= 5.0   # C or worse
+            self.rank_seen = True
         hp_loss = self.prev_hp - hp
         if hp_loss > 0:
             r -= hp_loss * 5.0                      # сильное наказание за урон
@@ -153,10 +190,19 @@ class UltraKillEnv:
         style_gain = style - self.prev_style
         if style_gain > 0:
             r += style_gain * 0.1                   # бонус за стиль/убийства
+            r += style_gain * 0.15                  # бонус за стиль/убийства
+            if style_gain > 50:
+                r += 1.0                            # испытания оружия
             if style_gain > 100:
                 r += 5.0                            # много врагов
             if style_gain > 200:
                 r += 10.0                           # убийство массы врагов
+            self.frames_since_style = 0
+        else:
+            self.frames_since_style += 1
+
+        if self.frames_since_style > 30 and (action[7] or action[8]):
+            r -= 0.1                                # стрельба без врагов
 
         r += (rail - self.prev_rail) * 2.0          # заряд rail
 
@@ -178,12 +224,26 @@ class UltraKillEnv:
 
         # --- смена оружия ---
         cur_slot = None
+        variant_switch = False
         for i in range(5):                 # слоты 1-5
             if action[SLOT_OFF+i]:
+            pressed = action[SLOT_OFF+i] > 0
+            if pressed and cur_slot is None:
                 cur_slot = i
         if cur_slot is not None and cur_slot != self.prev_slot:
             r += 0.5                       # бонус за смену
             self.frames_since_slot = 0
+            if pressed and i == self.prev_slot and not self.prev_slot_pressed[i]:
+                variant_switch = True
+            self.prev_slot_pressed[i] = pressed
+
+        if cur_slot is not None:
+            if variant_switch:
+                r += 0.3                   # переключение варианта оружия
+                self.frames_since_slot = 0
+            elif cur_slot != self.prev_slot:
+                r += 0.5                   # бонус за смену оружия
+                self.frames_since_slot = 0
             self.prev_slot = cur_slot
         else:
             self.frames_since_slot += 1
@@ -195,6 +255,7 @@ class UltraKillEnv:
         self.prev_rail, self.prev_style = rail, style
         self.prev_flash = flash
         self.prev_dead = dead
+        self.prev_frame = frame
 
         return obs, r, False, False, {}    # (no terminal flag yet)
 
@@ -219,6 +280,3 @@ class UltraKillWrapper(gym.Env):
         return None
     def close(self):
         pass
-
-
-
