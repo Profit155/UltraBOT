@@ -67,6 +67,9 @@ class UltraKillEnv:
         self.prev_style = 0
         self.prev_flash = False
         self.prev_dead = False
+        self.prev_frame = None            # previous observation frame
+        self.stuck_frames = 0             # number of frames with little change
+        self.checkpoint_active = False    # checkpoint text currently visible
 
     # ---------------- Gym API --------------
     def reset(self, *, seed=None, options=None):
@@ -107,9 +110,29 @@ class UltraKillEnv:
         dark  = frame.mean() < 30
         words = (frame[30:60, 20:64, :] > 200).mean() > 0.02
         dead  = dark and words
+        checkpoint = (frame[24:56, 18:66, :] > 230).mean() > 0.05
 
         # --- reward ---
         r = 0.0
+
+        # exploration based on frame difference
+        if self.prev_frame is not None:
+            diff = np.mean(np.abs(frame - self.prev_frame))
+            if diff < 2.0:
+                self.stuck_frames += 1
+                if self.stuck_frames > 180:
+                    r -= 0.1                     # penalty for staying still
+            else:
+                if diff > 20.0:
+                    r += 1.0                     # new area or big change
+                self.stuck_frames = 0
+
+        # checkpoint detection (white "CHECKPOINT" text)
+        if checkpoint and not self.checkpoint_active:
+            r += 10.0
+            self.checkpoint_active = True
+        elif not checkpoint:
+            self.checkpoint_active = False
         hp_loss = self.prev_hp - hp
         if hp_loss > 0:
             r -= hp_loss * 5.0                      # сильное наказание за урон
@@ -158,6 +181,7 @@ class UltraKillEnv:
         self.prev_rail, self.prev_style = rail, style
         self.prev_flash = flash
         self.prev_dead = dead
+        self.prev_frame = frame
 
         return obs, r, False, False, {}    # (no terminal flag yet)
 
