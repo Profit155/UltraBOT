@@ -43,6 +43,7 @@ STYLE_COLORS = {
     "SSADISTIC": (220, 0, 0),
     "SSSHITSTORM": (220, 0, 0),
     "ULTRAKILL": (255, 220, 70),
+
 # Approximate BGR colors for style ranks
 STYLE_COLORS = {
     "DESTRUCTIVE": (255, 110, 0),
