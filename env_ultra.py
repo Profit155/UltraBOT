@@ -44,6 +44,7 @@ class UltraKillEnv:
         self.prev_dash = self.prev_rail = 1.0
         self.prev_style = 0
         self.prev_flash = False
+        self.prev_dead = False
 
     # ---------------- Gym API --------------
     def reset(self, *, seed=None, options=None):
@@ -67,6 +68,9 @@ class UltraKillEnv:
         rail  = frame[82:83,  2:16, 1].mean()/255      # бирюза rail
         style = (frame[14:23, 67:83, :] > 200).sum()   # белые буквы
         flash = frame.mean() > 240
+        dark  = frame.mean() < 30
+        words = (frame[30:60, 20:64, :] > 200).mean() > 0.02
+        dead  = dark and words
 
         # --- reward ---
         r = 0.0
@@ -75,6 +79,9 @@ class UltraKillEnv:
             r -= hp_loss * 5.0                      # сильное наказание за урон
         if hp < 0.1 and self.prev_hp >= 0.1:
             r -= 20.0                               # смерть
+        if dead and not self.prev_dead:
+            pydirectinput.press('r')
+            r -= 30.0                               # чётко умер
 
         style_gain = style - self.prev_style
         if style_gain > 0:
@@ -114,6 +121,7 @@ class UltraKillEnv:
         self.prev_hp, self.prev_dash  = hp, dash
         self.prev_rail, self.prev_style = rail, style
         self.prev_flash = flash
+        self.prev_dead = dead
 
         return obs, r, False, False, {}    # (no terminal flag yet)
 
