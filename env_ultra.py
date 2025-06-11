@@ -42,7 +42,10 @@ class UltraKillEnv:
         self.frames_look_down = 0
         self.frames_look_up   = 0
 
-        self.observation_space = spaces.Box(0,255,shape=(3,*res),dtype=np.uint8)
+        w, h = res
+        self.observation_space = spaces.Box(
+            0, 255, shape=(3, h, w), dtype=np.uint8
+        )
         if mouse:
             self.action_space = spaces.Box(-1.0, 1.0,
                                           shape=(len(A_KEYS)+2,),
