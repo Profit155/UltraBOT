@@ -44,6 +44,7 @@ class UltraKillEnv:
         self.prev_dash = self.prev_rail = 1.0
         self.prev_style = 0
         self.prev_flash = False
+        self.prev_dead = False
 
     # ---------------- Gym API --------------
     def reset(self, *, seed=None, options=None):
@@ -67,17 +68,40 @@ class UltraKillEnv:
         rail  = frame[82:83,  2:16, 1].mean()/255      # бирюза rail
         style = (frame[14:23, 67:83, :] > 200).sum()   # белые буквы
         flash = frame.mean() > 240
+        dark  = frame.mean() < 30
+        words = (frame[30:60, 20:64, :] > 200).mean() > 0.02
+        dead  = dark and words
 
         # --- reward ---
-        r  = -(self.prev_hp - hp) * 1.0                       # береги HP
-        r +=  (style - self.prev_style) * 0.05                # стиль
-        r +=  (rail  - self.prev_rail)  * 2.0                 # заряд rail
+        r = 0.0
+        hp_loss = self.prev_hp - hp
+        if hp_loss > 0:
+            r -= hp_loss * 5.0                      # сильное наказание за урон
+        if hp < 0.1 and self.prev_hp >= 0.1:
+            r -= 20.0                               # смерть
+        if dead and not self.prev_dead:
+            pydirectinput.press('r')
+            r -= 30.0                               # чётко умер
+
+        style_gain = style - self.prev_style
+        if style_gain > 0:
+            r += style_gain * 0.1                   # бонус за стиль/убийства
+            if style_gain > 100:
+                r += 5.0                            # много врагов
+            if style_gain > 200:
+                r += 10.0                           # убийство массы врагов
+
+        r += (rail - self.prev_rail) * 2.0          # заряд rail
+
+        if action[IDX_SHIFT] and hp_loss == 0:
+            r += 0.5                                # уворот без получения урона
         if dash > self.prev_dash and not action[IDX_SPACE]:
-            r += 0.2                                          # dash восстановлен
+            r += 0.2                                # dash восстановлен
         if action[IDX_SHIFT] and dash < 0.1:
-            r -= 0.3                                          # спам dash без заряда
+            r -= 0.3                                # спам dash
+
         if flash and not self.prev_flash:
-            r += 3.0                                          # парри
+            r += 5.0                                # парри
 
         # --- смена оружия ---
         cur_slot = None
@@ -97,6 +121,7 @@ class UltraKillEnv:
         self.prev_hp, self.prev_dash  = hp, dash
         self.prev_rail, self.prev_style = rail, style
         self.prev_flash = flash
+        self.prev_dead = dead
 
         return obs, r, False, False, {}    # (no terminal flag yet)
 
