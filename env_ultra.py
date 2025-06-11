@@ -11,7 +11,7 @@ import numpy as np, cv2, mss, time, pydirectinput
 A_KEYS = [
     'w','a','s','d',          # 0-3  движение
     'space','shift','ctrl',   # 4-6  jump / dash / slide
-    'left','right',           # 7-8  Primary / Alt fire
+    'left','right',           # 7-8  LMB / RMB
     '1','2','3','4','5',      # 9-13 weapon slots
     'r','f','g'               # 14-16 hook / parry / knuckle
 ]
@@ -20,13 +20,35 @@ IDX_SPACE = A_KEYS.index('space')
 IDX_SHIFT = A_KEYS.index('shift')
 IDX_CTRL  = A_KEYS.index('ctrl')
 SLOT_OFF  = 9                        # индекс первого слота '1'
+MOUSE_AXES = 2                       # dx,dy appended when mouse=True
 
 # ───────────
 class UltraKillEnv:
-    def __init__(self, res=(84,84)):
+    def __init__(self, res=(84,84), mouse=False, mouse_scale=30):
+        """Initialize env.
+
+        Parameters
+        ----------
+        res : tuple
+            Resolution of grabbed screen.
+        mouse : bool
+            If True, the action space includes relative mouse movement
+            (dx, dy) in range [-1,1].
+        mouse_scale : int
+            Pixel multiplier for mouse movement per step.
+        """
         self.res = res
+        self.mouse = mouse
+        self.mouse_scale = mouse_scale
+
         self.observation_space = spaces.Box(0,255,shape=(3,*res),dtype=np.uint8)
-        self.action_space      = spaces.MultiBinary(len(A_KEYS))
+        if mouse:
+            self.action_space = spaces.Box(-1.0, 1.0,
+                                          shape=(len(A_KEYS)+2,),
+                                          dtype=np.float32)
+        else:
+            self.action_space = spaces.MultiBinary(len(A_KEYS))
+
         self.sct = mss.mss();  self.mon = self.sct.monitors[1]
 
         # prev-состояние для reward
@@ -44,6 +66,7 @@ class UltraKillEnv:
         self.prev_dash = self.prev_rail = 1.0
         self.prev_style = 0
         self.prev_flash = False
+        self.prev_dead = False
 
     # ---------------- Gym API --------------
     def reset(self, *, seed=None, options=None):
@@ -53,9 +76,23 @@ class UltraKillEnv:
         return self._grab().transpose(2,0,1), {}
 
     def step(self, action):
-        # --- клавиши ---
-        for i,key in enumerate(A_KEYS):
-            (pydirectinput.keyDown if action[i] else pydirectinput.keyUp)(key)
+        """Send actions and compute reward."""
+        # --- клавиши и мышь ---
+        dx = dy = 0
+        if self.mouse and len(action) >= len(A_KEYS)+2:
+            dx = int(float(action[len(A_KEYS)])   * self.mouse_scale)
+            dy = int(float(action[len(A_KEYS)+1]) * self.mouse_scale)
+
+        for i, key in enumerate(A_KEYS):
+            pressed = action[i] > 0
+            if key in ('left', 'right'):
+                btn = 'left' if key == 'left' else 'right'
+                (pydirectinput.mouseDown if pressed else pydirectinput.mouseUp)(button=btn)
+            else:
+                (pydirectinput.keyDown if pressed else pydirectinput.keyUp)(key)
+
+        if dx or dy:
+            pydirectinput.moveRel(dx, dy)
 
         time.sleep(0.016)                              # ~60 FPS
 
@@ -67,17 +104,40 @@ class UltraKillEnv:
         rail  = frame[82:83,  2:16, 1].mean()/255      # бирюза rail
         style = (frame[14:23, 67:83, :] > 200).sum()   # белые буквы
         flash = frame.mean() > 240
+        dark  = frame.mean() < 30
+        words = (frame[30:60, 20:64, :] > 200).mean() > 0.02
+        dead  = dark and words
 
         # --- reward ---
-        r  = -(self.prev_hp - hp) * 1.0                       # береги HP
-        r +=  (style - self.prev_style) * 0.05                # стиль
-        r +=  (rail  - self.prev_rail)  * 2.0                 # заряд rail
+        r = 0.0
+        hp_loss = self.prev_hp - hp
+        if hp_loss > 0:
+            r -= hp_loss * 5.0                      # сильное наказание за урон
+        if hp < 0.1 and self.prev_hp >= 0.1:
+            r -= 20.0                               # смерть
+        if dead and not self.prev_dead:
+            pydirectinput.press('r')
+            r -= 30.0                               # чётко умер
+
+        style_gain = style - self.prev_style
+        if style_gain > 0:
+            r += style_gain * 0.1                   # бонус за стиль/убийства
+            if style_gain > 100:
+                r += 5.0                            # много врагов
+            if style_gain > 200:
+                r += 10.0                           # убийство массы врагов
+
+        r += (rail - self.prev_rail) * 2.0          # заряд rail
+
+        if action[IDX_SHIFT] and hp_loss == 0:
+            r += 0.5                                # уворот без получения урона
         if dash > self.prev_dash and not action[IDX_SPACE]:
-            r += 0.2                                          # dash восстановлен
+            r += 0.2                                # dash восстановлен
         if action[IDX_SHIFT] and dash < 0.1:
-            r -= 0.3                                          # спам dash без заряда
+            r -= 0.3                                # спам dash
+
         if flash and not self.prev_flash:
-            r += 3.0                                          # парри
+            r += 5.0                                # парри
 
         # --- смена оружия ---
         cur_slot = None
@@ -97,6 +157,7 @@ class UltraKillEnv:
         self.prev_hp, self.prev_dash  = hp, dash
         self.prev_rail, self.prev_style = rail, style
         self.prev_flash = flash
+        self.prev_dead = dead
 
         return obs, r, False, False, {}    # (no terminal flag yet)
 
@@ -107,9 +168,9 @@ class UltraKillEnv:
 import gym
 class UltraKillWrapper(gym.Env):
     metadata = {"render_modes": []}
-    def __init__(self):
+    def __init__(self, mouse=False, mouse_scale=30):
         super().__init__()
-        self.core = UltraKillEnv()
+        self.core = UltraKillEnv(mouse=mouse, mouse_scale=mouse_scale)
         self.action_space      = self.core.action_space
         self.observation_space = self.core.observation_space
     def reset(self, seed=None, options=None):

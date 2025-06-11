@@ -6,7 +6,7 @@ p = argparse.ArgumentParser()
 p.add_argument('--steps', type=int, default=1000000)
 a = p.parse_args()
 
-env = UltraKillWrapper()
+env = UltraKillWrapper(mouse=True)
 
 dev = 'cuda' if torch.cuda.is_available() else 'cpu'
 model = PPO('CnnPolicy', env, device=dev, verbose=1, tensorboard_log='runs')
