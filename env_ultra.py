@@ -5,6 +5,7 @@ except ImportError:
 
 from gym import spaces
 import numpy as np, cv2, mss, time, pydirectinput
+import psutil
 # ─────────── action-space (17 бинарных кнопок) ───────────
 A_KEYS = [
     'w','a','s','d',          # 0-3  движение
@@ -22,7 +23,6 @@ MOUSE_AXES = 2                       # dx,dy appended when mouse=True
 
 # ───────────
 class UltraKillEnv:
-    def __init__(self, res=(84,84), mouse=False, mouse_scale=30):
     def __init__(self, res=(1024,768), mouse=False, mouse_scale=30):
         """Initialize env.
 
@@ -43,7 +43,10 @@ class UltraKillEnv:
         self.frames_look_down = 0
         self.frames_look_up   = 0
 
-        self.observation_space = spaces.Box(0,255,shape=(3,*res),dtype=np.uint8)
+        w, h = res
+        self.observation_space = spaces.Box(
+            0, 255, shape=(3, h, w), dtype=np.uint8
+        )
         if mouse:
             self.action_space = spaces.Box(-1.0, 1.0,
                                           shape=(len(A_KEYS)+2,),
@@ -58,10 +61,20 @@ class UltraKillEnv:
         self.frames_since_slot = 0
         self.prev_slot         = None
 
+        self._ensure_process()
+
     # ---------------- utils ----------------
     def _grab(self):
+        self._ensure_process()
         scr = np.asarray(self.sct.grab(self.mon))[:,:,:3]         # BGR
         return cv2.resize(scr, self.res, interpolation=cv2.INTER_AREA)
+
+    def _ensure_process(self):
+        """Raise RuntimeError if ULTRAKILL.exe is not running."""
+        for proc in psutil.process_iter(["name"]):
+            if proc.info.get("name", "").lower() == "ultrakill.exe":
+                return
+        raise RuntimeError("ULTRAKILL.exe process not found")
 
     def _reset_prev(self):
         self.prev_hp = 1.0
@@ -80,6 +93,7 @@ class UltraKillEnv:
 
     # ---------------- Gym API --------------
     def reset(self, *, seed=None, options=None):
+        self._ensure_process()
         self._reset_prev()
         self.frames_since_slot = 0
         self.prev_slot = None
@@ -87,6 +101,7 @@ class UltraKillEnv:
 
     def step(self, action):
         """Send actions and compute reward."""
+        self._ensure_process()
         # --- клавиши и мышь ---
         dx = dy = 0
         if self.mouse and len(action) >= len(A_KEYS)+2:
@@ -107,13 +122,8 @@ class UltraKillEnv:
         time.sleep(0.016)                              # ~60 FPS
 
         # --- наблюдение ---
-        frame = self._grab()                           # BGR 84×84×3
         frame = self._grab()
         obs   = frame.transpose(2,0,1)
-        hp    = frame[76:80,  2:16, 2].mean()/255      # красная полоска
-        dash  = frame[80:82,  2:16, 0].mean()/255      # голубой dash
-        rail  = frame[82:83,  2:16, 1].mean()/255      # бирюза rail
-        style = (frame[14:23, 67:83, :] > 200).sum()   # белые буквы
         w, h  = self.res
         hp    = frame[int(h*76/84):int(h*80/84),  int(w*2/84):int(w*16/84), 2].mean()/255
         dash  = frame[int(h*80/84):int(h*82/84), int(w*2/84):int(w*16/84), 0].mean()/255
@@ -121,7 +131,6 @@ class UltraKillEnv:
         style = (frame[int(h*14/84):int(h*23/84), int(w*67/84):int(w*83/84), :] > 200).sum()
         flash = frame.mean() > 240
         dark  = frame.mean() < 30
-        words = (frame[30:60, 20:64, :] > 200).mean() > 0.02
         words = (frame[int(h*30/84):int(h*60/84), int(w*20/84):int(w*64/84), :] > 200).mean() > 0.02
         dead  = dark and words
         checkpoint = (frame[int(h*24/84):int(h*56/84), int(w*18/84):int(w*66/84), :] > 230).mean() > 0.05
@@ -225,16 +234,15 @@ class UltraKillEnv:
         cur_slot = None
         variant_switch = False
         for i in range(5):                 # слоты 1-5
-            if action[SLOT_OFF+i]:
             pressed = action[SLOT_OFF+i] > 0
             if pressed and cur_slot is None:
                 cur_slot = i
-        if cur_slot is not None and cur_slot != self.prev_slot:
-            r += 0.5                       # бонус за смену
-            self.frames_since_slot = 0
             if pressed and i == self.prev_slot and not self.prev_slot_pressed[i]:
                 variant_switch = True
             self.prev_slot_pressed[i] = pressed
+        if cur_slot is not None and cur_slot != self.prev_slot:
+            r += 0.5                       # бонус за смену
+            self.frames_since_slot = 0
 
         if cur_slot is not None:
             if variant_switch:
