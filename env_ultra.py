@@ -40,6 +40,9 @@ class UltraKillEnv:
         self.res = res
         self.mouse = mouse
         self.mouse_scale = mouse_scale
+        # orientation penalty counters
+        self.frames_look_down = 0
+        self.frames_look_up   = 0
 
         self.observation_space = spaces.Box(0,255,shape=(3,*res),dtype=np.uint8)
         if mouse:
@@ -67,6 +70,8 @@ class UltraKillEnv:
         self.prev_style = 0
         self.prev_flash = False
         self.prev_dead = False
+        self.frames_look_down = 0
+        self.frames_look_up   = 0
 
     # ---------------- Gym API --------------
     def reset(self, *, seed=None, options=None):
@@ -76,12 +81,21 @@ class UltraKillEnv:
         return self._grab().transpose(2,0,1), {}
 
     def step(self, action):
-        """Send actions and compute reward."""
+        """Send actions and compute reward.
+
+        In addition to the usual damage/style rewards, this function
+        discourages keeping the camera pointed straight up or down for
+        extended periods by inspecting frame brightness.
+        """
         # --- клавиши и мышь ---
         dx = dy = 0
         if self.mouse and len(action) >= len(A_KEYS)+2:
             dx = int(float(action[len(A_KEYS)])   * self.mouse_scale)
             dy = int(float(action[len(A_KEYS)+1]) * self.mouse_scale)
+            # clip excessive movement to avoid wild spins
+            mx = int(self.mouse_scale * 0.75)
+            dx = int(np.clip(dx, -mx, mx))
+            dy = int(np.clip(dy, -mx, mx))
 
         for i, key in enumerate(A_KEYS):
             pressed = action[i] > 0
@@ -107,6 +121,23 @@ class UltraKillEnv:
         dark  = frame.mean() < 30
         words = (frame[30:60, 20:64, :] > 200).mean() > 0.02
         dead  = dark and words
+
+        # --- vertical look estimate via brightness profile ---
+        # bright bottom rows usually mean the camera faces downward and
+        # bright top rows the opposite. Counters accumulate how long
+        # the agent stares down or up to apply a small penalty later.
+        vert_profile = frame.mean(axis=2).mean(axis=1)
+        top_b  = vert_profile[:20].mean()
+        bot_b  = vert_profile[-20:].mean()
+        if bot_b - top_b > 5:
+            self.frames_look_down += 1
+            self.frames_look_up = 0
+        elif top_b - bot_b > 5:
+            self.frames_look_up += 1
+            self.frames_look_down = 0
+        else:
+            self.frames_look_down = 0
+            self.frames_look_up = 0
 
         # --- reward ---
         r = 0.0
@@ -138,6 +169,12 @@ class UltraKillEnv:
 
         if flash and not self.prev_flash:
             r += 5.0                                # парри
+
+        # penalize keeping the view pitched up or down for long
+        if self.frames_look_down > 60:
+            r -= 0.05
+        if self.frames_look_up > 60:
+            r -= 0.05
 
         # --- смена оружия ---
         cur_slot = None
