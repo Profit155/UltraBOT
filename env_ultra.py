@@ -90,10 +90,12 @@ class UltraKillEnv:
         raise RuntimeError("ULTRAKILL.exe process not found")
 
     def _ensure_window(self):
+        """Ensure the cached bounding box is available."""
         if self.win_bbox is None:
             self._update_window()
 
     def _update_window(self):
+        """Cache the coordinates of the ULTRAKILL window."""
         wins = [w for w in gw.getAllTitles() if "ULTRAKILL" in w.upper()]
         if not wins:
             raise RuntimeError("ULTRAKILL window not found")
