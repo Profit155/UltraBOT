@@ -1,11 +1,12 @@
-   env_ultra.py  — RL-обёртка ULTRAKILL V1|
-}?+. mn
-.o9 import gym                           # старый OpenAI Gym
-exc+_{"j'iL><}<r[r:
+# env_ultra.py — RL-обёртка ULTRAKILL V1
+
+try:
+    import gym                           # старый OpenAI Gym
+except ImportError:
     import gymnasium as gym              # если gym нет, берём gymnasium
 
-
-
+from gym import spaces
+import numpy as np, cv2, mss, time, pydirectinput
 # ─────────── action-space (17 бинарных кнопок) ───────────
 A_KEYS = [
     'w','a','s','d',          # 0-3  движение
