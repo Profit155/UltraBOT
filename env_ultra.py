@@ -5,6 +5,11 @@ except ImportError:
 
 from gym import spaces
 import numpy as np, cv2, mss, time, pydirectinput
+pydirectinput.PAUSE = 0  # eliminate delays between key events
+try:
+    pydirectinput.MINIMUM_DURATION = 0
+except AttributeError:
+    pass
 import psutil
 import pygetwindow as gw
 from pynput import keyboard
