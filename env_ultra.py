@@ -67,6 +67,11 @@ STYLE_REWARD = {
     "DESTRUCTIVE": -1.0,
 }
 
+# Thresholds and cooldowns to reduce false reward triggers
+STYLE_NOISE_THRESHOLD = 5           # ignore tiny style fluctuations
+HP_NOISE_THRESHOLD = 0.05           # ignore HP changes below 5%
+MOVE_NEW_AREA_COOLDOWN = 60         # frames to wait before awarding "new area"
+
 # ───────────
 class UltraKillEnv:
     def __init__(self, res=(1024,768), mouse=False, mouse_scale=30, debug=False):
@@ -199,6 +204,8 @@ class UltraKillEnv:
         self.prev_dead = False
         self.prev_frame = None            # previous observation frame
         self.stuck_frames = 0             # number of frames with little change
+        self.frames_since_area = MOVE_NEW_AREA_COOLDOWN  # cooldown for new area
+        self.prev_diff = 0.0              # difference between frames last step
         self.checkpoint_active = False    # checkpoint text currently visible
         self.prev_slot_pressed = [False]*5
         self.frames_since_style = 0       # frames since last style gain
@@ -290,10 +297,12 @@ class UltraKillEnv:
                 move_r = diff / 50.0
                 r += move_r                # encourage movement
                 events.append(f"move {move_r:.2f}")
-                if diff > 20.0:
+                if diff > 20.0 and self.frames_since_area > MOVE_NEW_AREA_COOLDOWN:
                     r += 1.0                     # likely entered new area
                     events.append("new area")
+                    self.frames_since_area = 0
                 self.stuck_frames = 0
+            self.frames_since_area += 1
 
         # checkpoint detection (white "CHECKPOINT" text)
         if checkpoint and not self.checkpoint_active:
@@ -321,7 +330,7 @@ class UltraKillEnv:
                 events.append("rank C")
             self.rank_seen = True
         hp_loss = self.prev_hp - hp
-        if hp_loss > 0:
+        if hp_loss > HP_NOISE_THRESHOLD:
             r -= hp_loss * 5.0                      # сильное наказание за урон
             events.append("damage")
         if hp < 0.1 and self.prev_hp >= 0.1:
@@ -335,7 +344,7 @@ class UltraKillEnv:
             terminated = True
 
         style_gain = style - self.prev_style
-        if style_gain > 0:
+        if style_gain > STYLE_NOISE_THRESHOLD:
             r += style_gain * 0.25                  # бонус за стиль/убийства
             events.append("style")
             if style_gain > 50:
