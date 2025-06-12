@@ -1,0 +1,12 @@
+numpy
+opencv-python
+matplotlib
+torch
+gymnasium
+stable-baselines3
+mss
+pydirectinput
+psutil
+pygetwindow
+pynput
+tqdm

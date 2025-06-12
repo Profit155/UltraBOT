@@ -23,6 +23,16 @@ too far up or down by comparing the brightness of the top and bottom
 rows of the screen. Keeping such an orientation for over a second results
 in a small penalty.
 
+
 ## License
 
 Released under the MIT License. See [LICENSE](LICENSE) for details.
+=======
+## Setup
+
+Install the required packages with:
+
+```bash
+pip install -r requirements.txt
+```
+
