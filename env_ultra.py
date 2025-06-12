@@ -205,7 +205,6 @@ class UltraKillEnv:
         self.prev_frame = None            # previous observation frame
         self.stuck_frames = 0             # number of frames with little change
         self.frames_since_area = MOVE_NEW_AREA_COOLDOWN  # cooldown for new area
-        self.prev_diff = 0.0              # difference between frames last step
         self.checkpoint_active = False    # checkpoint text currently visible
         self.hp_zero_frames = 0           # how many frames HP is ~0
         self.prev_slot_pressed = [False]*5
