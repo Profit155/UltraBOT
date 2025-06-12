@@ -1,5 +1,5 @@
 # UltraBOT
-нейросеть которая играет в ULTRAKILL
+IL+RL PLAYING ULTRAKILL
 
 ## Exploration rewards
 
