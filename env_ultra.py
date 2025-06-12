@@ -181,6 +181,7 @@ class UltraKillEnv:
         self.frames_look_down = 0
         self.frames_look_up   = 0
         self.prev_style_rank = None
+        self.blind_fire_frames = 0        # consecutive frames shooting walls
 
     # ---------------- Gym API --------------
     def reset(self, *, seed=None, options=None):
@@ -250,6 +251,7 @@ class UltraKillEnv:
 
         # --- reward ---
         r = 0.0
+        terminated = False
 
         # exploration based on frame difference
         if self.prev_frame is not None:
@@ -257,7 +259,9 @@ class UltraKillEnv:
             if diff < 1.0:
                 self.stuck_frames += 1
                 if self.stuck_frames > 180:
-                    r -= 0.2                     # penalty for staying still
+                    r -= 1.0                     # stronger penalty for staying still
+                elif self.stuck_frames > 60:
+                    r -= 0.1                     # discourage early camping
             else:
                 r += diff / 50.0                # encourage movement
                 if diff > 20.0:
@@ -288,10 +292,12 @@ class UltraKillEnv:
         if hp_loss > 0:
             r -= hp_loss * 5.0                      # сильное наказание за урон
         if hp < 0.1 and self.prev_hp >= 0.1:
-            r -= 20.0                               # смерть
+            r -= 50.0                               # смерть
+            terminated = True
         if dead and not self.prev_dead:
             pydirectinput.press('r')
-            r -= 30.0                               # чётко умер
+            r -= 50.0                               # чётко умер
+            terminated = True
 
         style_gain = style - self.prev_style
         if style_gain > 0:
@@ -312,7 +318,10 @@ class UltraKillEnv:
             self.prev_style_rank = style_rank
 
         if self.frames_since_style > 30 and (action[7] or action[8]):
-            r -= 0.1                                # стрельба без врагов
+            self.blind_fire_frames += 1
+            r -= 0.5 * self.blind_fire_frames      # escalating penalty
+        else:
+            self.blind_fire_frames = 0
 
         r += (rail - self.prev_rail) * 2.0          # заряд rail
 
@@ -372,7 +381,7 @@ class UltraKillEnv:
         self.prev_dead = dead
         self.prev_frame = frame
 
-        return obs, r, False, False, {}    # (no terminal flag yet)
+        return obs, r, terminated, False, {}    # terminated when dead
 
     def render(self, *a, **kw):
         pass
