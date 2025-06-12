@@ -22,3 +22,11 @@ The environment also estimates whether the camera is pointed
 too far up or down by comparing the brightness of the top and bottom
 rows of the screen. Keeping such an orientation for over a second results
 in a small penalty.
+
+## Setup
+
+Install the required packages with:
+
+```bash
+pip install -r requirements.txt
+```
