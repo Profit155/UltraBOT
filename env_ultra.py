@@ -55,17 +55,17 @@ STYLE_COLORS = {
     "ULTRAKILL": (70, 220, 255),
 }
 
-# Rewards when a new style rank appears
-STYLE_REWARD = {
-    "ULTRAKILL": 20.0,
-    "SSSHITSTORM": 15.0,
-    "SSADISTIC": 10.0,
-    "SUPREME": 5.0,
-    "ANARCHIC": 0.0,
-    "BRUTAL": -1.0,
-    "CHAOTIC": -1.0,
-    "DESTRUCTIVE": -1.0,
-}
+# Thresholds and cooldowns to reduce false reward triggers
+STYLE_NOISE_THRESHOLD = 5           # ignore tiny style fluctuations
+HP_NOISE_THRESHOLD = 0.1            # ignore HP changes below 10%
+# frames without style increase before we assume no enemies are around
+SHOOT_PENALTY_FRAMES = 20
+# stronger penalty for standing still too long
+STUCK_PENALTY = 3.0
+# frames in a row with almost zero HP to confirm death
+DEAD_FRAMES_THRESHOLD = 3
+# scale for frame difference downsampling
+DIFF_SCALE = 64
 
 # Thresholds and cooldowns to reduce false reward triggers
 STYLE_NOISE_THRESHOLD = 5           # ignore tiny style fluctuations
@@ -207,6 +207,7 @@ class UltraKillEnv:
         self.frames_since_area = MOVE_NEW_AREA_COOLDOWN  # cooldown for new area
         self.prev_diff = 0.0              # difference between frames last step
         self.checkpoint_active = False    # checkpoint text currently visible
+        self.hp_zero_frames = 0           # how many frames HP is ~0
         self.prev_slot_pressed = [False]*5
         self.frames_since_style = 0       # frames since last style gain
         self.rank_seen = False            # scoreboard rank not yet processed
@@ -287,11 +288,13 @@ class UltraKillEnv:
 
         # exploration based on frame difference
         if self.prev_frame is not None:
-            diff = np.mean(np.abs(frame - self.prev_frame))
+            small      = cv2.resize(frame, (DIFF_SCALE, DIFF_SCALE))
+            prev_small = cv2.resize(self.prev_frame, (DIFF_SCALE, DIFF_SCALE))
+            diff = np.mean(np.abs(small - prev_small))
             if diff < 1.0:
                 self.stuck_frames += 1
                 if self.stuck_frames > 180:
-                    r -= 1.0                     # stronger penalty for staying still
+                    r -= STUCK_PENALTY           # stronger penalty for staying still
                     events.append("stuck")
             else:
                 move_r = diff / 50.0
@@ -333,13 +336,17 @@ class UltraKillEnv:
         if hp_loss > HP_NOISE_THRESHOLD:
             r -= hp_loss * 5.0                      # сильное наказание за урон
             events.append("damage")
-        if hp < 0.1 and self.prev_hp >= 0.1:
-            r -= 50.0                               # смерть
+        if hp < 0.05:
+            self.hp_zero_frames += 1
+        else:
+            self.hp_zero_frames = 0
+        if self.hp_zero_frames >= DEAD_FRAMES_THRESHOLD and self.prev_hp >= 0.05:
+            r -= 100.0                              # смерть
             events.append("death")
             terminated = True
         if dead and not self.prev_dead:
             pydirectinput.press('r')
-            r -= 50.0                               # чётко умер
+            r -= 100.0                              # чётко умер
             events.append("dead screen")
             terminated = True
 
@@ -358,13 +365,10 @@ class UltraKillEnv:
             self.frames_since_style += 1
 
         if style_rank != self.prev_style_rank:
-            rank_r = STYLE_REWARD.get(style_rank, 0.0)
-            r += rank_r
-            events.append(f"style rank {style_rank} {rank_r:+.1f}")
             self.prev_style_rank = style_rank
 
-        if self.frames_since_style > 30 and (action[7] or action[8]):
-            r -= 0.5                                # стрельба без врагов
+        if self.frames_since_style > SHOOT_PENALTY_FRAMES and (action[7] or action[8]):
+            r -= 2.0                                # стрельба без врагов
             events.append("shooting alone")
 
         rail_r = (rail - self.prev_rail) * 2.0
@@ -372,22 +376,17 @@ class UltraKillEnv:
         if rail_r > 0:
             events.append("rail charge")
 
-        # bonus for active movement
+        # record basic movement actions (no reward)
         if action[IDX_SPACE]:
-            r += 0.05
             events.append("jump")
         if action[IDX_SHIFT]:
-            r += 0.05
             events.append("dash")
         if action[IDX_CTRL]:
-            r += 0.05
             events.append("slide")
 
         if action[IDX_SHIFT] and hp_loss == 0:
-            r += 0.5                                # уворот без получения урона
             events.append("dodge")
         if dash > self.prev_dash and not action[IDX_SPACE]:
-            r += 0.2                                # dash восстановлен
             events.append("dash ready")
         if action[IDX_SHIFT] and dash < 0.1:
             r -= 0.3                                # спам dash
