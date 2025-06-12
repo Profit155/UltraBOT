@@ -56,8 +56,8 @@ STYLE_COLORS = {
 }
 
 # Thresholds and cooldowns to reduce false reward triggers
-STYLE_NOISE_THRESHOLD = 5           # ignore tiny style fluctuations
-HP_NOISE_THRESHOLD = 0.1            # ignore HP changes below 10%
+STYLE_NOISE_THRESHOLD = 20          # ignore tiny style fluctuations
+HP_NOISE_THRESHOLD = 0.05           # ignore HP changes below 5%
 # frames without style increase before we assume no enemies are around
 SHOOT_PENALTY_FRAMES = 20
 # stronger penalty for standing still too long
@@ -67,9 +67,6 @@ DEAD_FRAMES_THRESHOLD = 3
 # scale for frame difference downsampling
 DIFF_SCALE = 64
 
-# Thresholds and cooldowns to reduce false reward triggers
-STYLE_NOISE_THRESHOLD = 5           # ignore tiny style fluctuations
-HP_NOISE_THRESHOLD = 0.05           # ignore HP changes below 5%
 MOVE_NEW_AREA_COOLDOWN = 60         # frames to wait before awarding "new area"
 
 # ───────────
@@ -255,7 +252,7 @@ class UltraKillEnv:
         x1, y1, x2, y2 = self.rail_box
         rail = frame[y1:y2, x1:x2, 1].mean() / 255
         style_region = self._crop_box(frame, self.style_bar_box)
-        style = (style_region > 200).sum()
+        style = (style_region > 220).sum()
         rank_patch = self._crop_box(frame, self.style_text_box)
         avg_color = rank_patch.mean(axis=(0, 1))
         style_rank = min(STYLE_COLORS, key=lambda k: np.linalg.norm(avg_color - np.array(STYLE_COLORS[k])))
@@ -367,7 +364,7 @@ class UltraKillEnv:
             self.prev_style_rank = style_rank
 
         if self.frames_since_style > SHOOT_PENALTY_FRAMES and (action[7] or action[8]):
-            r -= 2.0                                # стрельба без врагов
+            r -= 5.0                                # стрельба без врага
             events.append("shooting alone")
 
         rail_r = (rail - self.prev_rail) * 2.0
@@ -395,12 +392,24 @@ class UltraKillEnv:
             r += 5.0                                # парри
             events.append("parry")
 
+        # penalize using hook/parry/knuckle without effect
+        if not flash:
+            if action[A_KEYS.index('r')]:
+                r -= 1.0
+                events.append("useless hook")
+            if action[A_KEYS.index('f')]:
+                r -= 1.0
+                events.append("useless parry")
+            if action[A_KEYS.index('g')]:
+                r -= 1.0
+                events.append("useless knuckle")
+
         # penalize keeping the view pitched up or down for long
         if self.frames_look_down > 60:
-            r -= 0.05
+            r -= 0.5
             events.append("look down")
         if self.frames_look_up > 60:
-            r -= 0.05
+            r -= 0.5
             events.append("look up")
 
         # --- смена оружия ---
@@ -413,20 +422,18 @@ class UltraKillEnv:
             if pressed and i == self.prev_slot and not self.prev_slot_pressed[i]:
                 variant_switch = True
             self.prev_slot_pressed[i] = pressed
-        if cur_slot is not None and cur_slot != self.prev_slot:
-            r += 0.5                       # бонус за смену
-            events.append("switch weapon")
-            self.frames_since_slot = 0
-
         if cur_slot is not None:
+            if cur_slot != self.prev_slot:
+                if self.frames_since_slot < 30:
+                    r -= 1.0
+                    events.append("switch spam")
+                else:
+                    r += 0.1
+                    events.append("switch weapon")
+                self.frames_since_slot = 0
             if variant_switch:
-                r += 0.3                   # переключение варианта оружия
+                r += 0.1
                 events.append("variant switch")
-                self.frames_since_slot = 0
-            elif cur_slot != self.prev_slot:
-                r += 0.5                   # бонус за смену оружия
-                events.append("switch weapon")
-                self.frames_since_slot = 0
             self.prev_slot = cur_slot
         else:
             self.frames_since_slot += 1
