@@ -7,9 +7,9 @@ from stable_baselines3 import PPO
 from env_ultra import UltraKillWrapper
 
 
-def main(steps: int) -> None:
+def main(steps: int, debug: bool) -> None:
     """Train the RL agent for the specified number of steps."""
-    env = UltraKillWrapper(mouse=True)
+    env = UltraKillWrapper(mouse=True, debug=debug)
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model = PPO("CnnPolicy", env, device=device, verbose=1, tensorboard_log="runs")
 
@@ -24,4 +24,6 @@ def main(steps: int) -> None:
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--steps", type=int, default=1_000_000)
-    main(parser.parse_args().steps)
+    parser.add_argument("--debug", action="store_true", help="print reward details")
+    args = parser.parse_args()
+    main(args.steps, args.debug)

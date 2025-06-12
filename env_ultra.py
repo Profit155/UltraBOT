@@ -69,7 +69,7 @@ STYLE_REWARD = {
 
 # ───────────
 class UltraKillEnv:
-    def __init__(self, res=(1024,768), mouse=False, mouse_scale=30):
+    def __init__(self, res=(1024,768), mouse=False, mouse_scale=30, debug=False):
         """Initialize env.
 
         Parameters
@@ -85,6 +85,7 @@ class UltraKillEnv:
         self.res = res
         self.mouse = mouse
         self.mouse_scale = mouse_scale
+        self.debug = debug
         # orientation penalty counters
         self.frames_look_down = 0
         self.frames_look_up   = 0
@@ -275,6 +276,7 @@ class UltraKillEnv:
         # --- reward ---
         r = 0.0
         terminated = False
+        events = []
 
         # exploration based on frame difference
         if self.prev_frame is not None:
@@ -283,15 +285,20 @@ class UltraKillEnv:
                 self.stuck_frames += 1
                 if self.stuck_frames > 180:
                     r -= 1.0                     # stronger penalty for staying still
+                    events.append("stuck")
             else:
-                r += diff / 50.0                # encourage movement
+                move_r = diff / 50.0
+                r += move_r                # encourage movement
+                events.append(f"move {move_r:.2f}")
                 if diff > 20.0:
                     r += 1.0                     # likely entered new area
+                    events.append("new area")
                 self.stuck_frames = 0
 
         # checkpoint detection (white "CHECKPOINT" text)
         if checkpoint and not self.checkpoint_active:
             r += 10.0
+            events.append("checkpoint")
             self.checkpoint_active = True
         elif not checkpoint:
             self.checkpoint_active = False
@@ -302,27 +309,35 @@ class UltraKillEnv:
         if rank_brightness > 170 and not getattr(self, "rank_seen", False):
             if rank_brightness > 240:
                 r += 50.0  # P rank
+                events.append("rank P")
             elif rank_brightness > 210:
                 r += 30.0  # S or A
+                events.append("rank S/A")
             elif rank_brightness > 190:
                 r += 10.0  # B
+                events.append("rank B")
             else:
                 r -= 5.0   # C or worse
+                events.append("rank C")
             self.rank_seen = True
         hp_loss = self.prev_hp - hp
         if hp_loss > 0:
             r -= hp_loss * 5.0                      # сильное наказание за урон
+            events.append("damage")
         if hp < 0.1 and self.prev_hp >= 0.1:
             r -= 50.0                               # смерть
+            events.append("death")
             terminated = True
         if dead and not self.prev_dead:
             pydirectinput.press('r')
             r -= 50.0                               # чётко умер
+            events.append("dead screen")
             terminated = True
 
         style_gain = style - self.prev_style
         if style_gain > 0:
             r += style_gain * 0.25                  # бонус за стиль/убийства
+            events.append("style")
             if style_gain > 50:
                 r += 1.0                            # испытания оружия
             if style_gain > 100:
@@ -334,34 +349,52 @@ class UltraKillEnv:
             self.frames_since_style += 1
 
         if style_rank != self.prev_style_rank:
-            r += STYLE_REWARD.get(style_rank, 0.0)
+            rank_r = STYLE_REWARD.get(style_rank, 0.0)
+            r += rank_r
+            events.append(f"style rank {style_rank} {rank_r:+.1f}")
             self.prev_style_rank = style_rank
 
         if self.frames_since_style > 30 and (action[7] or action[8]):
             r -= 0.5                                # стрельба без врагов
+            events.append("shooting alone")
 
-        r += (rail - self.prev_rail) * 2.0          # заряд rail
+        rail_r = (rail - self.prev_rail) * 2.0
+        r += rail_r          # заряд rail
+        if rail_r > 0:
+            events.append("rail charge")
 
         # bonus for active movement
-        r += 0.05 * float(action[IDX_SPACE])
-        r += 0.05 * float(action[IDX_SHIFT])
-        r += 0.05 * float(action[IDX_CTRL])
+        if action[IDX_SPACE]:
+            r += 0.05
+            events.append("jump")
+        if action[IDX_SHIFT]:
+            r += 0.05
+            events.append("dash")
+        if action[IDX_CTRL]:
+            r += 0.05
+            events.append("slide")
 
         if action[IDX_SHIFT] and hp_loss == 0:
             r += 0.5                                # уворот без получения урона
+            events.append("dodge")
         if dash > self.prev_dash and not action[IDX_SPACE]:
             r += 0.2                                # dash восстановлен
+            events.append("dash ready")
         if action[IDX_SHIFT] and dash < 0.1:
             r -= 0.3                                # спам dash
+            events.append("dash spam")
 
         if flash and not self.prev_flash:
             r += 5.0                                # парри
+            events.append("parry")
 
         # penalize keeping the view pitched up or down for long
         if self.frames_look_down > 60:
             r -= 0.05
+            events.append("look down")
         if self.frames_look_up > 60:
             r -= 0.05
+            events.append("look up")
 
         # --- смена оружия ---
         cur_slot = None
@@ -375,20 +408,24 @@ class UltraKillEnv:
             self.prev_slot_pressed[i] = pressed
         if cur_slot is not None and cur_slot != self.prev_slot:
             r += 0.5                       # бонус за смену
+            events.append("switch weapon")
             self.frames_since_slot = 0
 
         if cur_slot is not None:
             if variant_switch:
                 r += 0.3                   # переключение варианта оружия
+                events.append("variant switch")
                 self.frames_since_slot = 0
             elif cur_slot != self.prev_slot:
                 r += 0.5                   # бонус за смену оружия
+                events.append("switch weapon")
                 self.frames_since_slot = 0
             self.prev_slot = cur_slot
         else:
             self.frames_since_slot += 1
             if self.frames_since_slot > 360:   # >6 сек без смены
                 r -= 0.05
+                events.append("no switch")
 
         # --- save prev ---
         self.prev_hp, self.prev_dash  = hp, dash
@@ -398,7 +435,11 @@ class UltraKillEnv:
         self.prev_dead = dead
         self.prev_frame = frame
 
-        return obs, r, terminated, False, {}    # terminated when dead
+        info = {"events": events}
+        if self.debug and events:
+            print(f"reward {r:.2f} -> {' | '.join(events)}")
+
+        return obs, r, terminated, False, info    # terminated when dead
 
     def render(self, *a, **kw):
         pass
@@ -412,9 +453,9 @@ class UltraKillEnv:
 import gym
 class UltraKillWrapper(gym.Env):
     metadata = {"render_modes": []}
-    def __init__(self, mouse=False, mouse_scale=30):
+    def __init__(self, mouse=False, mouse_scale=30, debug=False):
         super().__init__()
-        self.core = UltraKillEnv(mouse=mouse, mouse_scale=mouse_scale)
+        self.core = UltraKillEnv(mouse=mouse, mouse_scale=mouse_scale, debug=debug)
         self.action_space      = self.core.action_space
         self.observation_space = self.core.observation_space
     def reset(self, seed=None, options=None):
