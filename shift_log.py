@@ -1,9 +1,11 @@
-import json, pathlib
+import json
+import pathlib
 
 SRC = "logs/run.json"          # исходник
 DST = "logs/run_sync.json"     # новый лог
 
-data  = json.load(open(SRC))
+with open(SRC, "r", encoding="utf-8") as f:
+    data = json.load(f)
 shift = float(next(iter(data)))          # 1749066824.5830
 print("Shift =", shift)
 

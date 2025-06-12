@@ -1,4 +1,9 @@
-import cv2, numpy as np, json, argparse, pathlib, os
+import argparse
+import json
+import os
+import pathlib
+import cv2
+import numpy as np
 from tqdm import tqdm
 
 p = argparse.ArgumentParser()
@@ -10,7 +15,8 @@ p.add_argument("--fps",   type=int, default=60)
 a = p.parse_args()
 
 # ---------- читаем и сразу сортируем события ----------
-raw = json.load(open(a.log))
+with open(a.log, "r", encoding="utf-8") as f:
+    raw = json.load(f)
 events = sorted((float(t), ev) for t, ev in raw.items())
 ev_i   = 0                             # указатель на текущий эвент
 
@@ -43,6 +49,8 @@ with tqdm(total=total, unit="frame") as bar:
             img=small,
             keys=state.copy()
         )
-        idx += 1; bar.update(1)
+        idx += 1
+        bar.update(1)
 
+cap.release()
 print("Saved", idx, "samples →", a.out)

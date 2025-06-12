@@ -1,4 +1,4 @@
-import torch, time
+import torch
 import numpy as np
 from env_ultra import UltraKillEnv
 
@@ -23,16 +23,26 @@ class BCNet(torch.nn.Module):
     def forward(self,x): return self.fc(self.cnn(x))
 
 # ─── main ─────────────────────────────────────
-net = BCNet().cuda()
-net.load_state_dict(torch.load("bc.pt"))
-net.eval()
 
-env = UltraKillEnv()
-obs,_ = env.reset()
-while True:
-    with torch.no_grad():
-        inp = torch.tensor(obs/255.,dtype=torch.float32).unsqueeze(0).cuda()
-        out = net(inp)[0].cpu().numpy()
-    action = (out > 0.5).astype(np.float32)   # 0/1
-    obs, _, _, _, _ = env.step(action)
-    time.sleep(0.016)                         # ~60 FPS
+def main() -> None:
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    net = BCNet().to(device)
+    net.load_state_dict(torch.load("bc.pt", map_location=device))
+    net.eval()
+
+    env = UltraKillEnv()
+    obs, _ = env.reset()
+    while True:
+        with torch.no_grad():
+            inp = (
+                torch.tensor(obs / 255.0, dtype=torch.float32)
+                .unsqueeze(0)
+                .to(device)
+            )
+            out = net(inp)[0].cpu().numpy()
+        action = (out > 0.5).astype(np.float32)  # 0/1
+        obs, _, _, _, _ = env.step(action)
+
+
+if __name__ == "__main__":
+    main()
