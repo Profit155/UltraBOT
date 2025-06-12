@@ -348,14 +348,7 @@ class UltraKillEnv:
 
         style_gain = style - self.prev_style
         if style_gain > STYLE_NOISE_THRESHOLD:
-            r += style_gain * 0.25                  # бонус за стиль/убийства
             events.append("style")
-            if style_gain > 50:
-                r += 1.0                            # испытания оружия
-            if style_gain > 100:
-                r += 5.0                            # много врагов
-            if style_gain > 200:
-                r += 10.0                           # убийство массы врагов
             self.frames_since_style = 0
         else:
             self.frames_since_style += 1
