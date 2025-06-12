@@ -55,22 +55,9 @@ STYLE_COLORS = {
     "ULTRAKILL": (70, 220, 255),
 }
 
-# Rewards when a new style rank appears
-STYLE_REWARD = {
-    "ULTRAKILL": 20.0,
-    "SSSHITSTORM": 15.0,
-    "SSADISTIC": 10.0,
-    "SUPREME": 5.0,
-    "ANARCHIC": 0.0,
-    "BRUTAL": -1.0,
-    "CHAOTIC": -1.0,
-    "DESTRUCTIVE": -1.0,
-}
-
 # Thresholds and cooldowns to reduce false reward triggers
 STYLE_NOISE_THRESHOLD = 5           # ignore tiny style fluctuations
 HP_NOISE_THRESHOLD = 0.05           # ignore HP changes below 5%
-MOVE_NEW_AREA_COOLDOWN = 60         # frames to wait before awarding "new area"
 
 # ───────────
 class UltraKillEnv:
@@ -204,7 +191,6 @@ class UltraKillEnv:
         self.prev_dead = False
         self.prev_frame = None            # previous observation frame
         self.stuck_frames = 0             # number of frames with little change
-        self.frames_since_area = MOVE_NEW_AREA_COOLDOWN  # cooldown for new area
         self.prev_diff = 0.0              # difference between frames last step
         self.checkpoint_active = False    # checkpoint text currently visible
         self.prev_slot_pressed = [False]*5
@@ -291,18 +277,10 @@ class UltraKillEnv:
             if diff < 1.0:
                 self.stuck_frames += 1
                 if self.stuck_frames > 180:
-                    r -= 1.0                     # stronger penalty for staying still
+                    r -= 1.0                     # penalty for staying still
                     events.append("stuck")
             else:
-                move_r = diff / 50.0
-                r += move_r                # encourage movement
-                events.append(f"move {move_r:.2f}")
-                if diff > 20.0 and self.frames_since_area > MOVE_NEW_AREA_COOLDOWN:
-                    r += 1.0                     # likely entered new area
-                    events.append("new area")
-                    self.frames_since_area = 0
                 self.stuck_frames = 0
-            self.frames_since_area += 1
 
         # checkpoint detection (white "CHECKPOINT" text)
         if checkpoint and not self.checkpoint_active:
@@ -345,22 +323,11 @@ class UltraKillEnv:
 
         style_gain = style - self.prev_style
         if style_gain > STYLE_NOISE_THRESHOLD:
-            r += style_gain * 0.25                  # бонус за стиль/убийства
-            events.append("style")
-            if style_gain > 50:
-                r += 1.0                            # испытания оружия
-            if style_gain > 100:
-                r += 5.0                            # много врагов
-            if style_gain > 200:
-                r += 10.0                           # убийство массы врагов
             self.frames_since_style = 0
         else:
             self.frames_since_style += 1
 
         if style_rank != self.prev_style_rank:
-            rank_r = STYLE_REWARD.get(style_rank, 0.0)
-            r += rank_r
-            events.append(f"style rank {style_rank} {rank_r:+.1f}")
             self.prev_style_rank = style_rank
 
         if self.frames_since_style > 30 and (action[7] or action[8]):
@@ -372,22 +339,17 @@ class UltraKillEnv:
         if rail_r > 0:
             events.append("rail charge")
 
-        # bonus for active movement
+        # record basic movement actions (no reward)
         if action[IDX_SPACE]:
-            r += 0.05
             events.append("jump")
         if action[IDX_SHIFT]:
-            r += 0.05
             events.append("dash")
         if action[IDX_CTRL]:
-            r += 0.05
             events.append("slide")
 
         if action[IDX_SHIFT] and hp_loss == 0:
-            r += 0.5                                # уворот без получения урона
             events.append("dodge")
         if dash > self.prev_dash and not action[IDX_SPACE]:
-            r += 0.2                                # dash восстановлен
             events.append("dash ready")
         if action[IDX_SHIFT] and dash < 0.1:
             r -= 0.3                                # спам dash
