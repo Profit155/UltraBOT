@@ -4,15 +4,20 @@ except ImportError:
     import gymnasium as gym              # если gym нет, берём gymnasium
 
 from gym import spaces
-import numpy as np, cv2, mss, time, pydirectinput
+import cv2
+import mss
+import numpy as np
+import time
+import pydirectinput
+import psutil
+import pygetwindow as gw
+from pynput import keyboard
+
 pydirectinput.PAUSE = 0  # eliminate delays between key events
 try:
     pydirectinput.MINIMUM_DURATION = 0
 except AttributeError:
     pass
-import psutil
-import pygetwindow as gw
-from pynput import keyboard
 # ─────────── action-space (17 бинарных кнопок) ───────────
 A_KEYS = [
     'w','a','s','d',          # 0-3  движение
@@ -100,6 +105,7 @@ class UltraKillEnv:
         self.mon = self.sct.monitors[1]
         self.win_bbox = None
         self._update_window()
+        self._prepare_regions()
 
         self._exit = False
         self.listener = keyboard.GlobalHotKeys(
@@ -148,6 +154,14 @@ class UltraKillEnv:
             "height": win.height,
         }
 
+    def _prepare_regions(self):
+        """Precompute HUD coordinate boxes for the current resolution."""
+        self.hp_box = self._scale_coords(HP_TL, HP_BR)
+        self.stam_box = self._scale_coords(STAM_TL, STAM_BR)
+        self.rail_box = self._scale_coords(RAIL_TL, RAIL_BR)
+        self.style_text_box = self._scale_coords(STYLE_TEXT_TL, STYLE_TEXT_BR)
+        self.style_bar_box = self._scale_coords(STYLE_BAR_TL, STYLE_BAR_BR)
+
     def _scale_coords(self, tl, br):
         """Return scaled x1,y1,x2,y2 for the current resolution."""
         w, h = self.res
@@ -160,6 +174,11 @@ class UltraKillEnv:
     def _crop(self, frame, tl, br):
         """Crop HUD region from frame using base coordinates."""
         x1, y1, x2, y2 = self._scale_coords(tl, br)
+        return frame[y1:y2, x1:x2]
+
+    def _crop_box(self, frame, box):
+        """Crop HUD region from *frame* using precomputed box."""
+        x1, y1, x2, y2 = box
         return frame[y1:y2, x1:x2]
 
     def _set_exit(self):
@@ -220,16 +239,16 @@ class UltraKillEnv:
         # --- наблюдение ---
         frame = self._grab()
         obs   = frame.transpose(2,0,1)
-        w, h  = self.res
-        x1, y1, x2, y2 = self._scale_coords(HP_TL, HP_BR)
+        w, h = self.res
+        x1, y1, x2, y2 = self.hp_box
         hp = frame[y1:y2, x1:x2, 2].mean() / 255
-        x1, y1, x2, y2 = self._scale_coords(STAM_TL, STAM_BR)
+        x1, y1, x2, y2 = self.stam_box
         dash = frame[y1:y2, x1:x2, 0].mean() / 255
-        x1, y1, x2, y2 = self._scale_coords(RAIL_TL, RAIL_BR)
+        x1, y1, x2, y2 = self.rail_box
         rail = frame[y1:y2, x1:x2, 1].mean() / 255
-        style_region = self._crop(frame, STYLE_BAR_TL, STYLE_BAR_BR)
+        style_region = self._crop_box(frame, self.style_bar_box)
         style = (style_region > 200).sum()
-        rank_patch = self._crop(frame, STYLE_TEXT_TL, STYLE_TEXT_BR)
+        rank_patch = self._crop_box(frame, self.style_text_box)
         avg_color = rank_patch.mean(axis=(0, 1))
         style_rank = min(STYLE_COLORS, key=lambda k: np.linalg.norm(avg_color - np.array(STYLE_COLORS[k])))
         flash = frame.mean() > 240
@@ -303,8 +322,7 @@ class UltraKillEnv:
 
         style_gain = style - self.prev_style
         if style_gain > 0:
-            r += style_gain * 0.1                   # бонус за стиль/убийства
-            r += style_gain * 0.15                  # бонус за стиль/убийства
+            r += style_gain * 0.25                  # бонус за стиль/убийства
             if style_gain > 50:
                 r += 1.0                            # испытания оружия
             if style_gain > 100:

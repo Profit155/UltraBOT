@@ -1,23 +1,27 @@
+import argparse
+import os
+
+import torch
 from stable_baselines3 import PPO
+
 from env_ultra import UltraKillWrapper
-import torch, argparse
 
-p = argparse.ArgumentParser()
-p.add_argument('--steps', type=int, default=1000000)
-a = p.parse_args()
 
-env = UltraKillWrapper(mouse=True)
+def main(steps: int) -> None:
+    """Train the RL agent for the specified number of steps."""
+    env = UltraKillWrapper(mouse=True)
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    model = PPO("CnnPolicy", env, device=device, verbose=1, tensorboard_log="runs")
 
-dev = 'cuda' if torch.cuda.is_available() else 'cpu'
-model = PPO('CnnPolicy', env, device=dev, verbose=1, tensorboard_log='runs')
+    if os.path.exists("bc.pt"):
+        model.policy.load_state_dict(torch.load("bc.pt", map_location=device), strict=False)
+        print("[RL] warm-started")
 
-try:
-    import os
-    if os.path.exists('bc.pt'):
-        model.policy.load_state_dict(torch.load('bc.pt', map_location=dev), strict=False)
-        print('[RL] warm-started')
-except:
-    pass
+    model.learn(total_timesteps=steps)
+    model.save("ultra_rl")
 
-model.learn(total_timesteps=a.steps)
-model.save('ultra_rl')
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--steps", type=int, default=1_000_000)
+    main(parser.parse_args().steps)
